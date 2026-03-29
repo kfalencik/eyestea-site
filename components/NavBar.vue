@@ -1,6 +1,6 @@
 <template>
   <!-- Top nav -->
-  <header class="nav-bar">
+  <header class="nav-bar" :class="{ 'nav-bar--hidden': navHidden }">
     <div class="flex items-center gap-3">
       <img :src="'/Emblem.svg'" alt="Eyes Tea" class="w-9 h-9" style="filter: brightness(0) sepia(1) saturate(2) hue-rotate(10deg) brightness(0.4);" />
     </div>
@@ -30,6 +30,8 @@
 </template>
 
 <script setup>
+import { ref, onMounted, onUnmounted } from 'vue'
+
 defineProps({ cartCount: { type: Number, default: 0 } })
 defineEmits(['openCart'])
 
@@ -38,4 +40,25 @@ const links = [
   { href: '#flavours', label: 'Flavours' },
   { href: '#about', label: 'About' }
 ]
+
+const navHidden = ref(false)
+let lastScrollY = 0
+
+function onScroll () {
+  const y = window.scrollY
+  navHidden.value = y > lastScrollY && y > 60
+  lastScrollY = y
+}
+
+onMounted  (() => window.addEventListener('scroll', onScroll, { passive: true }))
+onUnmounted(() => window.removeEventListener('scroll', onScroll))
 </script>
+
+<style scoped>
+.nav-bar {
+  transition: transform 0.3s ease;
+}
+.nav-bar--hidden {
+  transform: translateY(-110%);
+}
+</style>

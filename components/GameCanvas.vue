@@ -38,17 +38,6 @@
         </svg>
       </button>
     </template>
-    <!-- Fullscreen button -->
-    <button class="fullscreen-btn" :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'" @click="toggleFullscreen">
-      <svg v-if="!isFullscreen" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
-        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
-      </svg>
-      <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
-        <line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>
-      </svg>
-    </button>
   </div>
 </template>
 
@@ -56,28 +45,12 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 
 const isPortrait    = ref(false)
-const isFullscreen  = ref(false)
 const isTouchDevice = ref(false)
 
 function checkOrientation () {
   const w = window.innerWidth
   const h = window.innerHeight
   isPortrait.value = w < h && w < 768
-}
-
-function onFullscreenChange () {
-  isFullscreen.value = !!document.fullscreenElement
-  checkOrientation()
-}
-
-async function toggleFullscreen () {
-  const wrapper = canvasRef.value?.closest('.game-wrapper')
-  if (!wrapper) return
-  if (!document.fullscreenElement) {
-    await wrapper.requestFullscreen().catch(() => {})
-  } else {
-    await document.exitFullscreen().catch(() => {})
-  }
 }
 
 // ── Canvas dimensions ─────────────────────────────────────────────────────────
@@ -89,15 +62,17 @@ const CART_W   = 200
 const CART_H   = 160
 const CAN_W    = 35
 const CAN_H    = 70
-const CART_SPD = 11  // pixels per frame
+const CART_SPD = 22  // pixels per frame
 
 const canvasRef = ref(null)
 
 // ── Game state ────────────────────────────────────────────────────────────────
 let ctx         = null
 let rafId       = null
-let imgs        = {}
+let imgs        = {}  
 let imgsLoaded  = 0
+let lastTime    = 0
+let dt          = 1   // delta-time multiplier, normalised to 60fps
 const TOTAL_IMGS = 6  // background, cart, peach, raspberry + crushed variants
 
 // 'start' | 'playing'
@@ -116,7 +91,7 @@ const cart = {
 // Falling cans pool
 const cans = []
 let spawnTimer = 0
-const SPAWN_INTERVAL  = 90   // frames between spawns
+const SPAWN_INTERVAL  = 30   // frames between spawns
 const MAX_MISSED      = 25   // game over threshold (5 lives)
 const MAX_CAUGHT_LOG  = 8    // how many recent catches to show in HUD
 
@@ -127,7 +102,7 @@ function spawnCan () {
     type,
     x: Math.random() * (WIDTH - CAN_W),
     y: -CAN_H,
-    vy: 0.9 + Math.random() * 0.7,
+    vy: 4.2 + Math.random() * 2.0,
     w: CAN_W,
     h: CAN_H,
     caught: false,
@@ -141,7 +116,7 @@ function spawnHazard () {
   hazards.push({
     x:        Math.max(25, Math.random() * (WIDTH - 74)),
     y:        -70,
-    vy:       0.65 + Math.random() * 0.4,
+    vy:       3.4 + Math.random() * 1.4,
     w:        50,
     h:        60,
     frame:    0,
@@ -169,7 +144,8 @@ const floatTexts        = []
 
 // ── Hazards (bombs) ──────────────────────────────────────────────────────────
 const hazards       = []
-let hazardTimer     = 0
+let hazardTimer        = 0
+let scoreRainTimer     = 0
 let bombFlashFrames  = 0
 let powerUpFlashFrames = 0
 let powerUpFlashColor  = '#ffffff'
@@ -179,12 +155,12 @@ const HAZARD_BASE   = 420   // ~7 s between bombs initially
 
 // ── Power-ups ─────────────────────────────────────────────────────────────────
 const POWERUPS = [
-  { type: 'slow_fall',    label: 'Slow Motion',   icon: '⏳', color: '#a78bfa', frames: 900 },
-  { type: 'double_score', label: 'Double Points', icon: '⭐', color: '#fbbf24', frames: 900 },
+  { type: 'slow_fall',    label: 'Slow Motion',   icon: '⏳', color: '#a78bfa', frames: 300 },
+  { type: 'double_score', label: 'Double Points', icon: '⭐', color: '#fbbf24', frames: 300 },
   { type: 'shield',       label: 'Shield',        icon: '🛡️', color: '#34d399', frames: 0   },
-  { type: 'magnet',       label: 'Magnet',        icon: '🧲', color: '#f472b6', frames: 420 },
-  { type: 'ghost',        label: 'Ghost Mode',    icon: '👻', color: '#22d3ee', frames: 900 },
-  { type: 'score_rain',   label: 'Score Rain',    icon: '💰', color: '#84cc16', frames: 900 },
+  { type: 'magnet',       label: 'Magnet',        icon: '🧲', color: '#f472b6', frames: 300 },
+  { type: 'ghost',        label: 'Ghost Mode',    icon: '👻', color: '#22d3ee', frames: 300 },
+  { type: 'score_rain',   label: 'Score Rain',    icon: '💰', color: '#84cc16', frames: 300 },
 ]
 let activePowerUp      = null
 let shieldCount        = 0
@@ -442,7 +418,7 @@ function activatePowerUp (pu) {
   }
 
   // Centred banner (replaces float text)
-  powerUpBanner = { pu, framesLeft: 210, maxFrames: 210 }
+  powerUpBanner = { pu, framesLeft: 120, maxFrames: 120 }
 }
 
 // ── Background music — jazz lounge loop (Am › F › C › G) ─────────────────────
@@ -567,6 +543,7 @@ function beginPlaying () {
   floatTexts.length   = 0
   hazards.length      = 0
   hazardTimer         = 0
+  scoreRainTimer      = 0
   bombFlashFrames     = 0
   powerUpBanner       = null
   comboTimer          = 0
@@ -576,13 +553,19 @@ function beginPlaying () {
   scoreMultiplier  = 1
   streakMult       = 1
   powerUpNextCombo = 10
+  lastTime = 0
   spawnTimer          = 0
   cart.x              = WIDTH / 2 - CART_W / 2
   cart.w              = CART_W
   startMusic()
 }
 
-function loop () {
+function loop (now) {
+  // Delta time, capped at 3 frames to avoid spiral-of-death on tab focus
+  const raw = lastTime === 0 ? 16.67 : Math.min(now - lastTime, 50)
+  lastTime  = now
+  dt = raw / 16.6667  // 1.0 = exactly 60fps; 2.0 = 30fps, etc.
+
   if (gameState === 'start') {
     drawStartScreen()
   } else if (gameState === 'gameover') {
@@ -595,35 +578,41 @@ function loop () {
 }
 
 function update () {
-  // Difficulty timer (kept for level display; no longer affects speed or spawn rate)
-  difficultyTimer++
+  // Difficulty timer
+  difficultyTimer += dt
   activeSpawnInterval = SPAWN_INTERVAL
 
-  // Score Rain: +3 pts every 45 frames
-  if (activePowerUp?.type === 'score_rain' && difficultyTimer % 45 === 0) {
-    score += 3
-    floatTexts.push({ text: '+3 💰', x: WIDTH / 2 + (Math.random() - 0.5) * 300, y: 140, life: 45, maxLife: 45, color: '#84cc16', size: 18 })
+  // Score Rain: +3 pts every 45 frames (use dedicated timer so modulo works with fractional dt)
+  if (activePowerUp?.type === 'score_rain') {
+    scoreRainTimer += dt
+    if (scoreRainTimer >= 45) {
+      scoreRainTimer -= 45
+      score += 3
+      floatTexts.push({ text: '+3 💰', x: WIDTH / 2 + (Math.random() - 0.5) * 300, y: 140, life: 45, maxLife: 45, color: '#84cc16', size: 18 })
+    }
+  } else {
+    scoreRainTimer = 0
   }
 
   // Tick active power-up
   if (activePowerUp) {
-    activePowerUp.framesLeft--
+    activePowerUp.framesLeft -= dt
     if (activePowerUp.framesLeft <= 0) deactivatePowerUp()
   }
 
   // Move cart
-  if (keys.left)  cart.x = Math.max(0, cart.x - CART_SPD)
-  if (keys.right) cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD)
+  if (keys.left)  cart.x = Math.max(0, cart.x - CART_SPD * dt)
+  if (keys.right) cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD * dt)
 
   // Shake & flash decay
-  if (shakeFrames > 0)        shakeFrames--
-  if (bombFlashFrames > 0)    bombFlashFrames--
-  if (powerUpFlashFrames > 0) powerUpFlashFrames--
+  if (shakeFrames > 0)        shakeFrames        -= dt
+  if (bombFlashFrames > 0)    bombFlashFrames    -= dt
+  if (powerUpFlashFrames > 0) powerUpFlashFrames -= dt
 
   // Combo decay timer — resets streak if no catch within COMBO_WINDOW
   // Slows down alongside globalSpeedMult (e.g. slow_fall power-up)
   if (combo > 0) {
-    comboTimer -= globalSpeedMult
+    comboTimer -= globalSpeedMult * dt
     if (comboTimer <= 0) {
       combo      = 0
       comboTimer = 0
@@ -632,7 +621,7 @@ function update () {
   }
 
   // Spawn cans
-  spawnTimer++
+  spawnTimer += dt
   if (spawnTimer >= activeSpawnInterval) {
     spawnCan()
     spawnTimer = 0
@@ -641,23 +630,23 @@ function update () {
   // Update particles
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i]
-    p.x  += p.vx
-    p.y  += p.vy
-    p.vy += 0.2
-    p.life--
+    p.x  += p.vx * dt
+    p.y  += p.vy * dt
+    p.vy += 0.2 * dt
+    p.life -= dt
     if (p.life <= 0) particles.splice(i, 1)
   }
 
   // Update float texts
   for (let i = floatTexts.length - 1; i >= 0; i--) {
     const f = floatTexts[i]
-    f.y   -= 1.3
-    f.life--
+    f.y   -= 1.3 * dt
+    f.life -= dt
     if (f.life <= 0) floatTexts.splice(i, 1)
   }
 
   // ── Hazard (bomb) spawn + update ────────────────────────────────────────────
-  hazardTimer++
+  hazardTimer += dt
   const hazardInterval = HAZARD_BASE
   if (difficultyTimer >= HAZARD_START && hazardTimer >= hazardInterval) {
     spawnHazard()
@@ -666,13 +655,13 @@ function update () {
 
   for (let i = hazards.length - 1; i >= 0; i--) {
     const h = hazards[i]
-    h.frame++
+    h.frame += dt
     if (h.hit) {
-      h.hitTimer++
+      h.hitTimer += dt
       if (h.hitTimer > 40) hazards.splice(i, 1)
       continue
     }
-    h.y += h.vy * globalSpeedMult
+    h.y += h.vy * globalSpeedMult * dt
     const hBottom     = h.y + h.h
     const hCX         = h.x + h.w / 2
     const hCatchTop   = cart.y
@@ -721,23 +710,23 @@ function update () {
     const c = cans[i]
 
     if (c.caught) {
-      c.crushTimer++
+      c.crushTimer += dt
       if (c.crushTimer > 30) cans.splice(i, 1)
       continue
     }
 
     if (c.missed) {
-      c.missTimer++
+      c.missTimer += dt
       if (c.missTimer > 180) cans.splice(i, 1)
       continue
     }
 
-    c.y += c.vy * globalSpeedMult
+    c.y += c.vy * globalSpeedMult * dt
 
     // Magnet: attract cans toward cart centre
     if (activePowerUp?.type === 'magnet') {
       const cartCX = cart.x + cart.w / 2
-      c.x += (cartCX - (c.x + c.w / 2)) * 0.04
+      c.x += (cartCX - (c.x + c.w / 2)) * 0.04 * dt
     }
 
     // AABB catch — check if can lands in cart opening (upper 60% of cart)
@@ -1347,7 +1336,7 @@ function draw () {
 
   // Ghost cyan room vignette (bomb immunity) — flashes in last 2s
   if (activePowerUp?.type === 'ghost') {
-    const ghostExpiring = activePowerUp.framesLeft <= 300
+    const ghostExpiring = activePowerUp.framesLeft <= 180
     const ghostVisible  = !ghostExpiring || (activePowerUp.framesLeft % 16 < 10)
     if (ghostVisible) {
       const ghostAlpha = ghostExpiring ? 0.22 : 0.14
@@ -1393,7 +1382,7 @@ function draw () {
 
   // ── Power-up banner ───────────────────────────────────────────────────
   if (powerUpBanner) {
-    powerUpBanner.framesLeft--
+    powerUpBanner.framesLeft -= dt
     if (powerUpBanner.framesLeft <= 0) {
       powerUpBanner = null
     } else {
@@ -1479,6 +1468,39 @@ function draw () {
 
   // HUD drawn last so it sits on top
   drawHUD()
+
+  // Power-up pill floats over the game, just below the HUD bar
+  if (activePowerUp) {
+    const puProg = activePowerUp.framesLeft / activePowerUp.maxFrames
+    const pillW  = 260
+    const pillH  = 26
+    const pillX  = WIDTH / 2 - pillW / 2
+    const pillY  = 96
+
+    ctx.save()
+    // background track
+    ctx.fillStyle = activePowerUp.color + '22'
+    roundRect(pillX, pillY, pillW, pillH, 13)
+    ctx.fill()
+    // progress fill
+    ctx.fillStyle = activePowerUp.color + '55'
+    roundRect(pillX, pillY, Math.max(pillW * puProg, 26), pillH, 13)
+    ctx.fill()
+    // border
+    ctx.strokeStyle = activePowerUp.color + 'cc'
+    ctx.lineWidth   = 1.5
+    roundRect(pillX, pillY, pillW, pillH, 13)
+    ctx.stroke()
+    // label
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font         = 'bold 13px monospace'
+    ctx.fillStyle    = '#fff'
+    ctx.shadowColor  = activePowerUp.color
+    ctx.shadowBlur   = 10
+    ctx.fillText(`${activePowerUp.icon}  ${activePowerUp.label.toUpperCase()}`, WIDTH / 2, pillY + pillH / 2)
+    ctx.restore()
+  }
 }
 
 function drawHUD () {
@@ -1546,32 +1568,7 @@ function drawHUD () {
     ctx.restore()
   }
 
-  // Active power-up pill (bottom-left)
-  if (activePowerUp) {
-    const puProg = activePowerUp.framesLeft / activePowerUp.maxFrames
-    const pillX  = LX + 64
-    const pillW  = 200
-    const pillH  = 14
-    const pillY  = 70
-
-    ctx.save()
-    ctx.fillStyle   = activePowerUp.color + '22'
-    roundRect(pillX, pillY, pillW, pillH, 7)
-    ctx.fill()
-    ctx.strokeStyle = activePowerUp.color + 'aa'
-    ctx.lineWidth   = 1
-    roundRect(pillX, pillY, pillW, pillH, 7)
-    ctx.stroke()
-    ctx.fillStyle   = activePowerUp.color + '44'
-    roundRect(pillX, pillY, Math.max(pillW * puProg, 14), pillH, 7)
-    ctx.fill()
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.font         = 'bold 9px monospace'
-    ctx.fillStyle    = '#fff'
-    ctx.fillText(`${activePowerUp.icon} ${activePowerUp.label.toUpperCase()}`, pillX + 8, pillY + pillH / 2)
-    ctx.restore()
-  }
+  // Active power-up pill moved to draw() — rendered below the HUD bar over the game
 
   // ── CENTRE: LIVES ────────────────────────────────────────────────
   const LIFE_N   = 5
@@ -1714,24 +1711,10 @@ function drawHUD () {
   ctx.restore()
 }
 
-// ── Touch input ──────────────────────────────────────────────────────────────
-function getTouchCanvasX (touch) {
-  const rect = canvasRef.value.getBoundingClientRect()
-  return (touch.clientX - rect.left) * (WIDTH / rect.width)
-}
-
+// ── Touch input — tap to start/restart only; movement via buttons ───────────
 function onTouchStart (e) {
   e.preventDefault()
-  if (gameState === 'start' || gameState === 'gameover') { beginPlaying(); return }
-  const x = getTouchCanvasX(e.touches[0])
-  cart.x = Math.max(0, Math.min(WIDTH - cart.w, x - cart.w / 2))
-}
-
-function onTouchMove (e) {
-  e.preventDefault()
-  if (gameState !== 'playing') return
-  const x = getTouchCanvasX(e.touches[0])
-  cart.x = Math.max(0, Math.min(WIDTH - cart.w, x - cart.w / 2))
+  if (gameState === 'start' || gameState === 'gameover') beginPlaying()
 }
 
 function onTouchEnd (e) {
@@ -1740,7 +1723,8 @@ function onTouchEnd (e) {
 
 // ── Keyboard input ────────────────────────────────────────────────────────────
 function onKeyDown (e) {
-  if (gameState === 'start' || gameState === 'gameover') { beginPlaying(); return }
+  if (gameState === 'start') { beginPlaying(); return }
+  if (gameState === 'gameover') return  // no accidental restart before reading score
   if (e.key === 'ArrowLeft'  || e.key === 'a') keys.left  = true
   if (e.key === 'ArrowRight' || e.key === 'd') keys.right = true
 }
@@ -1757,14 +1741,12 @@ onMounted(() => {
   isTouchDevice.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
   canvasRef.value.addEventListener('click',       onClick)
   canvasRef.value.addEventListener('touchstart',  onTouchStart,  { passive: false })
-  canvasRef.value.addEventListener('touchmove',   onTouchMove,   { passive: false })
   canvasRef.value.addEventListener('touchend',    onTouchEnd,    { passive: false })
   canvasRef.value.addEventListener('touchcancel', onTouchEnd,    { passive: false })
   window.addEventListener('keydown',          onKeyDown)
   window.addEventListener('keyup',            onKeyUp)
   window.addEventListener('resize',           checkOrientation)
   window.addEventListener('orientationchange',checkOrientation)
-  document.addEventListener('fullscreenchange', onFullscreenChange)
   checkOrientation()
   loadImages()
 })
@@ -1775,14 +1757,12 @@ onUnmounted(() => {
   if (audioCtx) { audioCtx.close(); audioCtx = null }
   canvasRef.value?.removeEventListener('click',       onClick)
   canvasRef.value?.removeEventListener('touchstart',  onTouchStart)
-  canvasRef.value?.removeEventListener('touchmove',   onTouchMove)
   canvasRef.value?.removeEventListener('touchend',    onTouchEnd)
   canvasRef.value?.removeEventListener('touchcancel', onTouchEnd)
   window.removeEventListener('keydown',           onKeyDown)
   window.removeEventListener('keyup',             onKeyUp)
   window.removeEventListener('resize',            checkOrientation)
   window.removeEventListener('orientationchange', checkOrientation)
-  document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 </script>
 
@@ -1896,40 +1876,11 @@ onUnmounted(() => {
   transform: scale(0.92);
 }
 .touch-btn--left  { left: 12px; }
-.touch-btn--right { right: 56px; }
+.touch-btn--right { right: 12px; }
 .touch-btn svg {
   width: 38px;
   height: 38px;
   pointer-events: none;
-}
-
-/* ── Fullscreen button ──────────────────────────────────────────────────── */
-.fullscreen-btn {
-  position: absolute;
-  bottom: 36px;
-  right: 8px;
-  width: 34px;
-  height: 34px;
-  padding: 7px;
-  background: rgba(26, 14, 6, 0.6);
-  border: 1px solid rgba(169, 124, 58, 0.35);
-  border-radius: 6px;
-  color: rgba(242, 232, 213, 0.7);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  backdrop-filter: blur(4px);
-}
-.fullscreen-btn:hover {
-  background: rgba(169, 124, 58, 0.25);
-  color: #f2e8d5;
-  border-color: rgba(169, 124, 58, 0.7);
-}
-.fullscreen-btn svg {
-  width: 100%;
-  height: 100%;
 }
 
 .portrait-fade-enter-active,
