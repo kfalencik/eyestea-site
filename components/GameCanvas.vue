@@ -834,132 +834,189 @@ function roundRect (x, y, w, h, r) {
 }
 
 function drawStartScreen () {
-  // Background
-  ctx.drawImage(imgs.bg, 0, 0, WIDTH, HEIGHT)
+  const t = Date.now() / 1000
 
-  // Dim overlay
-  ctx.fillStyle = 'rgba(10, 6, 2, 0.72)'
+  // ── Background ──────────────────────────────────────────────────────────
+  ctx.drawImage(imgs.bg, 0, 0, WIDTH, HEIGHT)
+  const bgOv = ctx.createLinearGradient(0, 0, 0, HEIGHT)
+  bgOv.addColorStop(0,   'rgba(8,4,1,0.93)')
+  bgOv.addColorStop(0.45,'rgba(8,4,1,0.78)')
+  bgOv.addColorStop(1,   'rgba(8,4,1,0.95)')
+  ctx.fillStyle = bgOv
   ctx.fillRect(0, 0, WIDTH, HEIGHT)
 
-  // ── Card ──────────────────────────────────────────────────────────
-  const cardW = 720
-  const cardH = 480
-  const cardX = (WIDTH  - cardW) / 2
-  const cardY = (HEIGHT - cardH) / 2
-
-  // Card shadow
-  ctx.save()
-  ctx.shadowColor = 'rgba(0,0,0,0.6)'
-  ctx.shadowBlur  = 48
-  ctx.fillStyle   = '#faf6ee'
-  roundRect(cardX, cardY, cardW, cardH, 10)
-  ctx.fill()
-  ctx.restore()
-
-  // Card border — brass top rule
-  const grad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY)
-  grad.addColorStop(0,    'rgba(169,124,58,0)')
-  grad.addColorStop(0.3,  'rgba(169,124,58,1)')
-  grad.addColorStop(0.5,  'rgba(192,90,60,1)')
-  grad.addColorStop(0.7,  'rgba(169,124,58,1)')
-  grad.addColorStop(1,    'rgba(169,124,58,0)')
-  ctx.fillStyle = grad
-  ctx.fillRect(cardX, cardY, cardW, 2)
-
-  // ── Title ─────────────────────────────────────────────────────────
-  ctx.save()
-  ctx.textAlign    = 'center'
-  ctx.textBaseline = 'top'
-  ctx.font         = 'bold 52px "Cormorant Garamond", serif'
-  // Brass gradient text simulation via solid colour
-  ctx.fillStyle    = '#a97c3a'
-  ctx.fillText('Catch & Collect', WIDTH / 2, cardY + 36)
-  ctx.restore()
-
-  // Sub-title
-  ctx.save()
-  ctx.textAlign    = 'center'
-  ctx.textBaseline = 'top'
-  ctx.font         = 'italic 20px "Cormorant Garamond", serif'
-  ctx.fillStyle    = 'rgba(26,14,6,0.55)'
-  ctx.fillText('Steeped in mischief — fill your cart, earn your rewards', WIDTH / 2, cardY + 102)
-  ctx.restore()
-
-  // Divider
-  ctx.strokeStyle = 'rgba(169,124,58,0.3)'
-  ctx.lineWidth   = 1
-  ctx.beginPath()
-  ctx.moveTo(cardX + 60,  cardY + 136)
-  ctx.lineTo(cardX + cardW - 60, cardY + 136)
-  ctx.stroke()
-
-  // ── Reward rows ───────────────────────────────────────────────────
-  const rewards = [
-    { icon: '🛒', label: '5 cans caught',  reward: '5% off your next order' },
-    { icon: '⭐', label: '10 cans caught', reward: 'Free can in your basket'  },
-    { icon: '🎉', label: '20 cans caught', reward: 'Unlock a secret flavour'  },
-  ]
-
-  const rowH   = 66
-  const startY = cardY + 156
-
-  rewards.forEach((r, i) => {
-    const ry = startY + i * rowH
-    const col = i % 2 === 0 ? 'rgba(169,124,58,0.06)' : 'transparent'
-    ctx.fillStyle = col
-    ctx.fillRect(cardX + 40, ry, cardW - 80, rowH - 6)
-
-    // Icon
-    ctx.font         = '26px serif'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(r.icon, cardX + 60, ry + (rowH - 6) / 2)
-
-    // Label
-    ctx.font      = 'bold 18px "Cormorant Garamond", serif'
-    ctx.fillStyle = '#1a0e06'
-    ctx.fillText(r.label, cardX + 104, ry + (rowH - 6) / 2 - 10)
-
-    // Reward
-    ctx.font      = 'italic 16px "Cormorant Garamond", serif'
-    ctx.fillStyle = '#c05a3c'
-    ctx.fillText('→  ' + r.reward, cardX + 104, ry + (rowH - 6) / 2 + 14)
+  // ── Ambient glow orbs ────────────────────────────────────────────────────
+  ;[
+    { x: WIDTH * 0.22, y: HEIGHT * 0.38, r: 300, c: 'rgba(169,124,58,0.11)' },
+    { x: WIDTH * 0.78, y: HEIGHT * 0.42, r: 260, c: 'rgba(192,90,60,0.09)'  },
+  ].forEach(o => {
+    const g = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, o.r)
+    g.addColorStop(0, o.c); g.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = g; ctx.fillRect(0, 0, WIDTH, HEIGHT)
   })
 
-  // Divider
-  ctx.strokeStyle = 'rgba(169,124,58,0.3)'
-  ctx.lineWidth   = 1
-  ctx.beginPath()
-  ctx.moveTo(cardX + 60,  cardY + cardH - 90)
-  ctx.lineTo(cardX + cardW - 60, cardY + cardH - 90)
-  ctx.stroke()
+  // ── Drifting background cans ─────────────────────────────────────────────
+  ;[
+    { x:  90, bY: 200, ph: 0.0,  img: 'peach',     sz: 52, al: 0.14, rot: -0.18 },
+    { x: 215, bY: 490, ph: 1.3,  img: 'raspberry', sz: 40, al: 0.11, rot:  0.22 },
+    { x:1080, bY: 215, ph: 0.7,  img: 'raspberry', sz: 52, al: 0.14, rot:  0.15 },
+    { x:1165, bY: 465, ph: 2.1,  img: 'peach',     sz: 40, al: 0.11, rot: -0.12 },
+    { x: 145, bY: 365, ph: 3.2,  img: 'raspberry', sz: 30, al: 0.08, rot:  0.30 },
+    { x:1115, bY: 345, ph: 1.9,  img: 'peach',     sz: 30, al: 0.08, rot: -0.24 },
+  ].forEach(c => {
+    const img = imgs[c.img]
+    ctx.save()
+    ctx.globalAlpha = c.al
+    ctx.translate(c.x, c.bY + Math.sin(t * 0.7 + c.ph) * 16)
+    ctx.rotate(c.rot + Math.sin(t * 0.45 + c.ph) * 0.05)
+    ctx.drawImage(img, -c.sz / 2, -c.sz, c.sz, c.sz * 2)
+    ctx.restore()
+  })
 
-  // Bomb warning line
+  // ── Centre stage ─────────────────────────────────────────────────────────
+  const STAGE_CX = WIDTH  / 2
+  const STAGE_Y  = 36
+  const STAGE_H  = 248
+
+  // Stage glow
+  const sg = ctx.createRadialGradient(STAGE_CX, STAGE_Y + STAGE_H / 2, 10, STAGE_CX, STAGE_Y + STAGE_H / 2, 210)
+  sg.addColorStop(0,   'rgba(169,124,58,0.18)')
+  sg.addColorStop(0.6, 'rgba(169,124,58,0.05)')
+  sg.addColorStop(1,   'rgba(0,0,0,0)')
+  ctx.fillStyle = sg; ctx.fillRect(0, STAGE_Y, WIDTH, STAGE_H)
+
+  // Cart
+  const CW = 188, CH = 150
+  const CX = STAGE_CX - CW / 2
+  const cycleLen  = 2.6
+  const fallCycle = (t % cycleLen) / cycleLen
+  const bounce    = fallCycle > 0.86 ? Math.sin((fallCycle - 0.86) / 0.14 * Math.PI) * 7 : 0
+  const CY = STAGE_Y + STAGE_H - CH - 2 + bounce
+  ctx.drawImage(imgs.cart, CX, CY, CW, CH)
+
+  // Falling can
+  const canType = (Math.floor(t / cycleLen) % 2 === 0) ? 'peach' : 'raspberry'
+  const CDW = 40, CDH = 74
+  const canY = STAGE_Y + 8 + fallCycle * (STAGE_H - CH - 28)
+  if (fallCycle < 0.88) {
+    const gp = 0.4 + 0.4 * Math.abs(Math.sin(t * 3.2))
+    ctx.save()
+    ctx.shadowColor = '#fbbf24'
+    ctx.shadowBlur  = 12 * gp
+    ctx.drawImage(imgs[canType], STAGE_CX - CDW / 2, canY, CDW, CDH)
+    ctx.restore()
+  }
+
+  // Ground line
+  const gl = ctx.createLinearGradient(STAGE_CX - 120, 0, STAGE_CX + 120, 0)
+  gl.addColorStop(0, 'rgba(169,124,58,0)'); gl.addColorStop(0.5, 'rgba(169,124,58,0.4)'); gl.addColorStop(1, 'rgba(169,124,58,0)')
+  ctx.strokeStyle = gl; ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(STAGE_CX - 120, CY + CH + 5); ctx.lineTo(STAGE_CX + 120, CY + CH + 5); ctx.stroke()
+
+  // ── Title ────────────────────────────────────────────────────────────────
+  const titleY = STAGE_Y + STAGE_H + 18
+
+  // Base text with glow
   ctx.save()
   ctx.textAlign    = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.font         = 'italic 15px "Cormorant Garamond", serif'
-  ctx.fillStyle    = '#c05a3c'
-  ctx.fillText('💣  Dodge the bombs — they cost 5 lives!', WIDTH / 2, cardY + cardH - 66)
+  ctx.textBaseline = 'top'
+  ctx.font         = 'bold 80px "Cormorant Garamond", serif'
+  ctx.shadowColor  = '#a97c3a'
+  ctx.shadowBlur   = 30
+  ctx.fillStyle    = '#f2e8d5'
+  ctx.fillText('CATCH & COLLECT', STAGE_CX, titleY)
+  // Shimmer pass
+  const shimX = ((t * 0.34) % 1.35 - 0.15) * WIDTH
+  const shim  = ctx.createLinearGradient(shimX - 110, 0, shimX + 110, 0)
+  shim.addColorStop(0, 'rgba(255,255,255,0)'); shim.addColorStop(0.5, 'rgba(255,255,255,0.2)'); shim.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = shim; ctx.shadowBlur = 0
+  ctx.fillText('CATCH & COLLECT', STAGE_CX, titleY)
   ctx.restore()
 
-  // ── CTA button ────────────────────────────────────────────────────
-  const btnW = 260
-  const btnH = 48
-  const btnX = (WIDTH  - btnW) / 2
-  const btnY = cardY + cardH - 72
-
-  ctx.fillStyle = '#1a0e06'
-  roundRect(btnX, btnY, btnW, btnH, 4)
-  ctx.fill()
-
+  // Subtitle
   ctx.save()
   ctx.textAlign    = 'center'
+  ctx.textBaseline = 'top'
+  ctx.font         = 'italic 24px "Cormorant Garamond", serif'
+  ctx.fillStyle    = 'rgba(192,90,60,0.88)'
+  ctx.fillText('an Eyes Tea adventure', STAGE_CX, titleY + 90)
+  ctx.restore()
+
+  // ── Brass rule with diamond ───────────────────────────────────────────────
+  const ruleY = titleY + 128
+  const ruleG = ctx.createLinearGradient(STAGE_CX - 280, 0, STAGE_CX + 280, 0)
+  ruleG.addColorStop(0,    'rgba(169,124,58,0)')
+  ruleG.addColorStop(0.25, 'rgba(169,124,58,0.8)')
+  ruleG.addColorStop(0.5,  'rgba(192,90,60,1)')
+  ruleG.addColorStop(0.75, 'rgba(169,124,58,0.8)')
+  ruleG.addColorStop(1,    'rgba(169,124,58,0)')
+  ctx.strokeStyle = ruleG; ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(STAGE_CX - 280, ruleY); ctx.lineTo(STAGE_CX + 280, ruleY); ctx.stroke()
+  ctx.save(); ctx.translate(STAGE_CX, ruleY); ctx.rotate(Math.PI / 4)
+  ctx.fillStyle = '#a97c3a'; ctx.fillRect(-3.5, -3.5, 7, 7)
+  ctx.restore()
+
+  // ── Power-up pills row ───────────────────────────────────────────────────
+  const pills  = ['⏳ Slow-Mo', '⭐ ×2 Points', '🛡️ Shield', '🧲 Magnet', '👻 Ghost', '💰 Score Rain']
+  const pillW  = 154, pillH2 = 24, pillGap = 10
+  const pillY  = ruleY + 14
+  const totalPW = pills.length * pillW + (pills.length - 1) * pillGap
+  let pX = STAGE_CX - totalPW / 2
+  ctx.font = 'bold 11px monospace'
+  for (const p of pills) {
+    ctx.save()
+    ctx.fillStyle   = 'rgba(169,124,58,0.10)'
+    ctx.strokeStyle = 'rgba(169,124,58,0.28)'
+    ctx.lineWidth   = 0.8
+    roundRect(pX, pillY, pillW, pillH2, 4); ctx.fill(); ctx.stroke()
+    ctx.fillStyle    = 'rgba(242,232,213,0.68)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(p, pX + pillW / 2, pillY + pillH2 / 2)
+    ctx.restore()
+    pX += pillW + pillGap
+  }
+
+  // ── Info lines ───────────────────────────────────────────────────────────
+  const infoY = pillY + pillH2 + 16
+  ;[
+    { text: '💣  Dodge bombs — a hit costs one life', color: 'rgba(192,90,60,0.80)' },
+    { text: '⚡  Catch 10 in a row to unlock a power-up   •   Streak multiplies your points', color: 'rgba(242,232,213,0.45)' },
+  ].forEach((l, i) => {
+    ctx.save()
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'top'
+    ctx.font         = `italic 15px "Cormorant Garamond", serif`
+    ctx.fillStyle    = l.color
+    ctx.fillText(l.text, STAGE_CX, infoY + i * 22)
+    ctx.restore()
+  })
+
+  // ── Pulsing CTA button ───────────────────────────────────────────────────
+  const pulse = 0.80 + 0.20 * Math.abs(Math.sin(t * 1.9))
+  const btnW  = 320, btnH = 54
+  const btnX  = STAGE_CX - btnW / 2
+  const btnY2 = HEIGHT - 72
+
+  ctx.save()
+  ctx.shadowColor = `rgba(169,124,58,${0.55 * pulse})`
+  ctx.shadowBlur  = 26 * pulse
+  const bG = ctx.createLinearGradient(btnX, btnY2, btnX + btnW, btnY2 + btnH)
+  bG.addColorStop(0, '#2a1a0a'); bG.addColorStop(1, '#1a0e06')
+  ctx.fillStyle = bG
+  roundRect(btnX, btnY2, btnW, btnH, 6); ctx.fill()
+  const bBord = ctx.createLinearGradient(btnX, 0, btnX + btnW, 0)
+  bBord.addColorStop(0,   'rgba(169,124,58,0.18)')
+  bBord.addColorStop(0.5, `rgba(169,124,58,${0.75 * pulse})`)
+  bBord.addColorStop(1,   'rgba(169,124,58,0.18)')
+  ctx.strokeStyle = bBord; ctx.lineWidth = 1.5
+  roundRect(btnX, btnY2, btnW, btnH, 6); ctx.stroke()
+  ctx.textAlign    = 'center'
   ctx.textBaseline = 'middle'
-  ctx.font         = 'bold 17px "Cormorant Garamond", serif'
-  ctx.fillStyle    = '#faf6ee'
-  ctx.letterSpacing = '0.15em'
-  ctx.fillText('PRESS ANY KEY OR CLICK TO PLAY', WIDTH / 2, btnY + btnH / 2)
+  ctx.font         = 'bold 15px monospace'
+  ctx.fillStyle    = `rgba(242,232,213,${0.72 + 0.28 * pulse})`
+  ctx.shadowColor  = 'transparent'
+  ctx.fillText('▶   TAP OR CLICK TO PLAY', STAGE_CX, btnY2 + btnH / 2)
   ctx.restore()
 }
 
