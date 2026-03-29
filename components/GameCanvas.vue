@@ -182,7 +182,7 @@ const POWERUPS = [
   { type: 'slow_fall',    label: 'Slow Motion',   icon: '⏳', color: '#a78bfa', frames: 900 },
   { type: 'double_score', label: 'Double Points', icon: '⭐', color: '#fbbf24', frames: 900 },
   { type: 'shield',       label: 'Shield',        icon: '🛡️', color: '#34d399', frames: 0   },
-  { type: 'magnet',       label: 'Magnet',        icon: '🧲', color: '#f472b6', frames: 900 },
+  { type: 'magnet',       label: 'Magnet',        icon: '🧲', color: '#f472b6', frames: 420 },
   { type: 'ghost',        label: 'Ghost Mode',    icon: '👻', color: '#22d3ee', frames: 900 },
   { type: 'score_rain',   label: 'Score Rain',    icon: '💰', color: '#84cc16', frames: 900 },
 ]
