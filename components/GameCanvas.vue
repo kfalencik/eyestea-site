@@ -1,11 +1,84 @@
 <template>
   <div class="game-wrapper">
+    <!-- Portrait / too-small overlay -->
+    <Transition name="portrait-fade">
+      <div v-if="isPortrait" class="portrait-overlay">
+        <div class="portrait-card">
+          <span class="rotate-icon">📱</span>
+          <p class="portrait-title">Rotate your phone</p>
+          <p class="portrait-sub">Flip to landscape to play</p>
+        </div>
+      </div>
+    </Transition>
     <canvas ref="canvasRef" :width="WIDTH" :height="HEIGHT" class="game-canvas" />
+    <!-- Touch L/R buttons (only on touch devices) -->
+    <template v-if="isTouchDevice">
+      <button
+        class="touch-btn touch-btn--left"
+        @pointerdown.prevent="keys.left = true"
+        @pointerup.prevent="keys.left = false"
+        @pointerleave="keys.left = false"
+        @pointercancel="keys.left = false"
+        aria-label="Move left"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 18 9 12 15 6"/>
+        </svg>
+      </button>
+      <button
+        class="touch-btn touch-btn--right"
+        @pointerdown.prevent="keys.right = true"
+        @pointerup.prevent="keys.right = false"
+        @pointerleave="keys.right = false"
+        @pointercancel="keys.right = false"
+        aria-label="Move right"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+      </button>
+    </template>
+    <!-- Fullscreen button -->
+    <button class="fullscreen-btn" :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'" @click="toggleFullscreen">
+      <svg v-if="!isFullscreen" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+      </svg>
+      <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
+        <line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>
+      </svg>
+    </button>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+
+const isPortrait    = ref(false)
+const isFullscreen  = ref(false)
+const isTouchDevice = ref(false)
+
+function checkOrientation () {
+  const w = window.innerWidth
+  const h = window.innerHeight
+  isPortrait.value = w < h && w < 768
+}
+
+function onFullscreenChange () {
+  isFullscreen.value = !!document.fullscreenElement
+  checkOrientation()
+}
+
+async function toggleFullscreen () {
+  const wrapper = canvasRef.value?.closest('.game-wrapper')
+  if (!wrapper) return
+  if (!document.fullscreenElement) {
+    await wrapper.requestFullscreen().catch(() => {})
+  } else {
+    await document.exitFullscreen().catch(() => {})
+  }
+}
 
 // ── Canvas dimensions ─────────────────────────────────────────────────────────
 const WIDTH  = 1280
@@ -1580,11 +1653,35 @@ function drawHUD () {
   ctx.fillStyle    = 'rgba(255,255,255,0.25)'
   ctx.textAlign    = 'center'
   ctx.textBaseline = 'bottom'
-  ctx.fillText('← →  or  A / D  to move', WIDTH / 2, HEIGHT - 10)
+  ctx.fillText(isTouchDevice.value ? 'Use buttons or drag to move' : '← →  or  A / D  to move', WIDTH / 2, HEIGHT - 10)
   ctx.restore()
 }
 
-// ── Input ─────────────────────────────────────────────────────────────────────
+// ── Touch input ──────────────────────────────────────────────────────────────
+function getTouchCanvasX (touch) {
+  const rect = canvasRef.value.getBoundingClientRect()
+  return (touch.clientX - rect.left) * (WIDTH / rect.width)
+}
+
+function onTouchStart (e) {
+  e.preventDefault()
+  if (gameState === 'start' || gameState === 'gameover') { beginPlaying(); return }
+  const x = getTouchCanvasX(e.touches[0])
+  cart.x = Math.max(0, Math.min(WIDTH - cart.w, x - cart.w / 2))
+}
+
+function onTouchMove (e) {
+  e.preventDefault()
+  if (gameState !== 'playing') return
+  const x = getTouchCanvasX(e.touches[0])
+  cart.x = Math.max(0, Math.min(WIDTH - cart.w, x - cart.w / 2))
+}
+
+function onTouchEnd (e) {
+  e.preventDefault()
+}
+
+// ── Keyboard input ────────────────────────────────────────────────────────────
 function onKeyDown (e) {
   if (gameState === 'start' || gameState === 'gameover') { beginPlaying(); return }
   if (e.key === 'ArrowLeft'  || e.key === 'a') keys.left  = true
@@ -1600,9 +1697,18 @@ function onClick () {
 
 onMounted(() => {
   ctx = canvasRef.value.getContext('2d')
-  canvasRef.value.addEventListener('click', onClick)
-  window.addEventListener('keydown', onKeyDown)
-  window.addEventListener('keyup',   onKeyUp)
+  isTouchDevice.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+  canvasRef.value.addEventListener('click',       onClick)
+  canvasRef.value.addEventListener('touchstart',  onTouchStart,  { passive: false })
+  canvasRef.value.addEventListener('touchmove',   onTouchMove,   { passive: false })
+  canvasRef.value.addEventListener('touchend',    onTouchEnd,    { passive: false })
+  canvasRef.value.addEventListener('touchcancel', onTouchEnd,    { passive: false })
+  window.addEventListener('keydown',          onKeyDown)
+  window.addEventListener('keyup',            onKeyUp)
+  window.addEventListener('resize',           checkOrientation)
+  window.addEventListener('orientationchange',checkOrientation)
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+  checkOrientation()
   loadImages()
 })
 
@@ -1610,14 +1716,22 @@ onUnmounted(() => {
   if (rafId) cancelAnimationFrame(rafId)
   stopMusic()
   if (audioCtx) { audioCtx.close(); audioCtx = null }
-  canvasRef.value?.removeEventListener('click', onClick)
-  window.removeEventListener('keydown', onKeyDown)
-  window.removeEventListener('keyup',   onKeyUp)
+  canvasRef.value?.removeEventListener('click',       onClick)
+  canvasRef.value?.removeEventListener('touchstart',  onTouchStart)
+  canvasRef.value?.removeEventListener('touchmove',   onTouchMove)
+  canvasRef.value?.removeEventListener('touchend',    onTouchEnd)
+  canvasRef.value?.removeEventListener('touchcancel', onTouchEnd)
+  window.removeEventListener('keydown',           onKeyDown)
+  window.removeEventListener('keyup',             onKeyUp)
+  window.removeEventListener('resize',            checkOrientation)
+  window.removeEventListener('orientationchange', checkOrientation)
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 </script>
 
 <style scoped>
 .game-wrapper {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1626,15 +1740,143 @@ onUnmounted(() => {
   margin-top: 50px;
 }
 
+/* In fullscreen mode, fill the screen and centre the canvas */
+.game-wrapper:fullscreen,
+.game-wrapper:-webkit-full-screen {
+  background: #1a0e06;
+  padding: 0;
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Canvas scales down proportionally to fit both viewport width & height */
 .game-canvas {
   display: block;
-  width: 1280px;
-  height: 720px;
-  max-width: 100%;
+  /* Never wider than viewport, never taller than (viewport - 80px nav) at 16:9 */
+  width: min(1280px, 100vw, calc((100vh - 80px) * 1.7778));
+  height: auto;
   aspect-ratio: 16 / 9;
   image-rendering: pixelated;
   border: 3px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  touch-action: none; /* prevent browser scroll/zoom on canvas touch */
 }
+
+/* ── Portrait overlay ────────────────────────────────────────────────────── */
+.portrait-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(26, 14, 6, 0.94);
+  backdrop-filter: blur(8px);
+  border-radius: 6px;
+}
+
+.portrait-card {
+  text-align: center;
+  padding: 32px 24px;
+}
+
+.rotate-icon {
+  display: block;
+  font-size: 3.5rem;
+  margin-bottom: 18px;
+  animation: rotate-hint 1.4s ease-in-out infinite alternate;
+  transform-origin: center;
+}
+
+.portrait-title {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #f2e8d5;
+  margin: 0 0 8px;
+}
+
+.portrait-sub {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: rgba(242, 232, 213, 0.5);
+  margin: 0;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+@keyframes rotate-hint {
+  from { transform: rotate(-5deg); }
+  to   { transform: rotate(85deg); }
+}
+
+/* ── Touch D-pad buttons ──────────────────────────────────────────────────── */
+.touch-btn {
+  position: absolute;
+  bottom: 36px;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(26, 14, 6, 0.55);
+  border: 2px solid rgba(169, 124, 58, 0.45);
+  color: rgba(242, 232, 213, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  backdrop-filter: blur(6px);
+  transition: background 0.1s, border-color 0.1s, transform 0.08s;
+  z-index: 10;
+}
+.touch-btn:active {
+  background: rgba(169, 124, 58, 0.35);
+  border-color: rgba(169, 124, 58, 0.9);
+  transform: scale(0.92);
+}
+.touch-btn--left  { left: 12px; }
+.touch-btn--right { right: 56px; }
+.touch-btn svg {
+  width: 38px;
+  height: 38px;
+  pointer-events: none;
+}
+
+/* ── Fullscreen button ──────────────────────────────────────────────────── */
+.fullscreen-btn {
+  position: absolute;
+  bottom: 36px;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  padding: 7px;
+  background: rgba(26, 14, 6, 0.6);
+  border: 1px solid rgba(169, 124, 58, 0.35);
+  border-radius: 6px;
+  color: rgba(242, 232, 213, 0.7);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+.fullscreen-btn:hover {
+  background: rgba(169, 124, 58, 0.25);
+  color: #f2e8d5;
+  border-color: rgba(169, 124, 58, 0.7);
+}
+.fullscreen-btn svg {
+  width: 100%;
+  height: 100%;
+}
+
+.portrait-fade-enter-active,
+.portrait-fade-leave-active { transition: opacity 0.3s ease; }
+.portrait-fade-enter-from,
+.portrait-fade-leave-to     { opacity: 0; }
 </style>
