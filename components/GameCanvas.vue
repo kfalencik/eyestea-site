@@ -213,6 +213,7 @@ let scoreRainTimer     = 0
 let bombFlashFrames  = 0
 let powerUpFlashFrames = 0
 let powerUpFlashColor  = '#ffffff'
+let freezeFlashFrames  = 0   // cryo-flash on deep freeze activation
 let powerUpBanner      = null   // { pu, framesLeft, maxFrames }
 const HAZARD_START  = 0     // bombs start immediately
 const HAZARD_BASE   = 420   // ~7 s between bomb waves initially
@@ -222,12 +223,14 @@ let targetBombTimer = 0
 
 // ── Power-ups ─────────────────────────────────────────────────────────────────
 const POWERUPS = [
-  { type: 'slow_fall',    label: 'Slow Motion',   icon: '⏳', color: '#a78bfa', frames: 300 },
-  { type: 'double_score', label: 'Double Points', icon: '⭐', color: '#fbbf24', frames: 300 },
-  { type: 'shield',       label: 'Shield',        icon: '🛡️', color: '#34d399', frames: 0   },
-  { type: 'magnet',       label: 'Magnet',        icon: '🧲', color: '#f472b6', frames: 300 },
-  { type: 'ghost',        label: 'Ghost Mode',    icon: '👻', color: '#22d3ee', frames: 300 },
-  { type: 'score_rain',   label: 'Score Rain',    icon: '💰', color: '#84cc16', frames: 300 },
+  { type: 'slow_fall',     label: 'Slow Motion',   icon: '⏳', color: '#a78bfa', frames: 300 },
+  { type: 'double_score',  label: 'Double Points', icon: '⭐', color: '#fbbf24', frames: 300 },
+  { type: 'shield',        label: 'Shield',        icon: '🛡️', color: '#34d399', frames: 0   },
+  { type: 'magnet',        label: 'Magnet',        icon: '🧲', color: '#f472b6', frames: 300 },
+  { type: 'ghost',         label: 'Ghost Mode',    icon: '👻', color: '#22d3ee', frames: 300 },
+  { type: 'score_rain',    label: 'Point Rain',    icon: '💰', color: '#84cc16', frames: 300 },
+  { type: 'frenzy',        label: 'Catch Frenzy',  icon: '🌀', color: '#e879f9', frames: 300 },
+  { type: 'freeze_bombs',  label: 'Deep Freeze',   icon: '❄️', color: '#bae6fd', frames: 300 },
 ]
 let activePowerUp      = null
 let shieldCount        = 0
@@ -235,6 +238,7 @@ let globalSpeedMult    = 1.0
 let scoreMultiplier    = 1
 let streakMult         = 1   // 1 / 2 / 3 based on combo tier
 let powerUpNextCombo   = 10
+let bombsFrozen        = false // set true during freeze_bombs power-up
 
 // ── Audio (Web Audio API) ─────────────────────────────────────────────────────
 let audioCtx   = null
@@ -428,6 +432,31 @@ function playPowerUp (type = 'default') {
       gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.055 + 0.12)
       osc.start(t + i * 0.055); osc.stop(t + i * 0.055 + 0.12)
     })
+  } else if (type === 'frenzy') {
+    // Fast ascending arpeggio burst
+    ;[330, 415, 523, 659, 830, 1047].forEach((f, i) => {
+      const osc  = audioCtx.createOscillator()
+      const gain = audioCtx.createGain()
+      osc.connect(gain); gain.connect(masterGain)
+      osc.type = 'square'
+      osc.frequency.value = f
+      gain.gain.setValueAtTime(0, t + i * 0.045)
+      gain.gain.linearRampToValueAtTime(0.08, t + i * 0.045 + 0.01)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.045 + 0.18)
+      osc.start(t + i * 0.045); osc.stop(t + i * 0.045 + 0.18)
+    })
+  } else if (type === 'freeze_bombs') {
+    // Crystalline descending ice tones
+    ;[1568, 1319, 1047, 880, 698].forEach((f, i) => {
+      const osc  = audioCtx.createOscillator()
+      const gain = audioCtx.createGain()
+      osc.connect(gain); gain.connect(masterGain)
+      osc.type = 'sine'
+      osc.frequency.value = f
+      gain.gain.setValueAtTime(0.11, t + i * 0.07)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.07 + 0.35)
+      osc.start(t + i * 0.07); osc.stop(t + i * 0.07 + 0.35)
+    })
   } else {
     // Shield — deep resonant bell
     const osc  = audioCtx.createOscillator()
@@ -497,7 +526,9 @@ function playBombHit () {
 function deactivatePowerUp () {
   if (!activePowerUp) return
   if (activePowerUp.type === 'slow_fall')    globalSpeedMult = 1.0
+  if (activePowerUp.type === 'frenzy')       globalSpeedMult = 1.0
   if (activePowerUp.type === 'double_score') scoreMultiplier = 1
+  if (activePowerUp.type === 'freeze_bombs') bombsFrozen = false
   activePowerUp = null
 }
 
@@ -507,8 +538,11 @@ function activatePowerUp (pu) {
   const frames  = pu.frames > 0 ? pu.frames : 180
   activePowerUp = { ...pu, framesLeft: frames, maxFrames: frames }
   if (pu.type === 'slow_fall')    globalSpeedMult = 0.45
+  if (pu.type === 'frenzy')       globalSpeedMult = 2.0
   if (pu.type === 'double_score') scoreMultiplier = 2
   if (pu.type === 'shield')       shieldCount = 1
+  if (pu.type === 'freeze_bombs') { bombsFrozen = true; freezeFlashFrames = 30 }
+  if (pu.type === 'frenzy')       hazards.length = 0   // clear all active bombs
 
   playPowerUp(pu.type)
 
@@ -665,6 +699,7 @@ function beginPlaying () {
   targetBombTimer     = 0
   scoreRainTimer      = 0
   bombFlashFrames     = 0
+  freezeFlashFrames   = 0
   powerUpBanner       = null
   comboTimer          = 0
   if (activePowerUp) deactivatePowerUp()
@@ -673,6 +708,7 @@ function beginPlaying () {
   scoreMultiplier  = 1
   streakMult       = 1
   powerUpNextCombo = 10
+  bombsFrozen      = false
   lastTime = 0
   spawnTimer          = 0
   cart.x              = WIDTH / 2 - CART_W / 2
@@ -703,6 +739,8 @@ function update () {
   // Difficulty timer
   difficultyTimer += dt
   activeSpawnInterval = SPAWN_INTERVAL
+  // Frenzy: double can spawn rate + suppress all bombs
+  if (activePowerUp?.type === 'frenzy') activeSpawnInterval = Math.max(8, Math.floor(SPAWN_INTERVAL * 0.4))
 
   // Score Rain: +3 pts every 45 frames (use dedicated timer so modulo works with fractional dt)
   if (activePowerUp?.type === 'score_rain') {
@@ -742,6 +780,7 @@ function update () {
   if (shakeFrames > 0)        shakeFrames        -= dt
   if (bombFlashFrames > 0)    bombFlashFrames    -= dt
   if (powerUpFlashFrames > 0) powerUpFlashFrames -= dt
+  if (freezeFlashFrames > 0)  freezeFlashFrames  -= dt
 
   // Combo decay timer — resets streak if no catch within COMBO_WINDOW
   // Slows down alongside globalSpeedMult (e.g. slow_fall power-up)
@@ -788,12 +827,13 @@ function update () {
   const hazardInterval = Math.max(HAZARD_MIN, HAZARD_BASE - diffTier * 30)
   // Simultaneous bombs: 1 at tiers 0-2, 2 at 3-5, 3 at tier 6+
   const hazardCount    = diffTier >= 6 ? 3 : diffTier >= 3 ? 2 : 1
-  if (difficultyTimer >= HAZARD_START && hazardTimer >= hazardInterval) {
+  const bombsSuppressed = activePowerUp?.type === 'frenzy' || activePowerUp?.type === 'freeze_bombs'
+  if (!bombsSuppressed && difficultyTimer >= HAZARD_START && hazardTimer >= hazardInterval) {
     for (let _h = 0; _h < hazardCount; _h++) spawnHazard(_h * 45)
     hazardTimer = 0
   }
   // Targeted bomb every 5 s
-  if (difficultyTimer >= HAZARD_START && targetBombTimer >= TARGET_BOMB_INTERVAL) {
+  if (!bombsSuppressed && difficultyTimer >= HAZARD_START && targetBombTimer >= TARGET_BOMB_INTERVAL) {
     spawnTargetedHazard()
     targetBombTimer = 0
   }
@@ -810,7 +850,12 @@ function update () {
       if (h.hitTimer > 40) hazards.splice(i, 1)
       continue
     }
-    h.y += h.vy * globalSpeedMult * dt
+    // Freeze Bombs: halt all hazard movement
+    if (bombsFrozen) {
+      h.frame += dt   // still animate fuse
+    } else {
+      h.y += h.vy * globalSpeedMult * dt
+    }
     const hBottom     = h.y + h.h
     const hCX         = h.x + h.w / 2
     const hCatchTop   = cart.y
@@ -824,8 +869,10 @@ function update () {
       hCX <= hCatchRight
     ) {
       h.hit = true
-      if (activePowerUp?.type === 'ghost') {
-        floatTexts.push({ text: '👻 PHASED!', x: hCX, y: h.y, life: 60, maxLife: 60, color: '#22d3ee', size: 22 })
+      if (activePowerUp?.type === 'ghost' || activePowerUp?.type === 'freeze_bombs') {
+        const msg = activePowerUp.type === 'ghost' ? '👻 PHASED!' : '❄️ FROZEN!'
+        const col = activePowerUp.type === 'ghost' ? '#22d3ee' : '#bae6fd'
+        floatTexts.push({ text: msg, x: hCX, y: h.y, life: 60, maxLife: 60, color: col, size: 22 })
       } else {
         combo           = 0
         comboTimer      = 0
@@ -1105,28 +1152,33 @@ function drawStartScreen () {
   ctx.restore()
 
   // ── Power-up pills row ───────────────────────────────────────────────────
-  const pills  = ['⏳ Slow-Mo', '⭐ ×2 Points', '🛡️ Shield', '🧲 Magnet', '👻 Ghost', '💰 Score Rain']
-  const pillW  = 154, pillH2 = 24, pillGap = 10
-  const pillY  = ruleY + 14
-  const totalPW = pills.length * pillW + (pills.length - 1) * pillGap
-  let pX = STAGE_CX - totalPW / 2
+  const pills     = ['⏳ Slow-Mo', '⭐ ×2 Points', '🛡️ Shield', '🧲 Magnet', '👻 Ghost', '💰 Score Rain', '🌀 Catch Frenzy', '❄️ Deep Freeze']
+  const pillW     = 138, pillH2 = 22, pillGap = 8
+  const pillsPerRow = 4
+  const rowW      = pillsPerRow * pillW + (pillsPerRow - 1) * pillGap
+  let pillY       = ruleY + 14
   ctx.font = 'bold 11px monospace'
-  for (const p of pills) {
+  for (let pi = 0; pi < pills.length; pi++) {
+    const col = pi % pillsPerRow
+    const row = Math.floor(pi / pillsPerRow)
+    const pX  = STAGE_CX - rowW / 2 + col * (pillW + pillGap)
+    const pY  = pillY + row * (pillH2 + 6)
     ctx.save()
     ctx.fillStyle   = 'rgba(169,124,58,0.10)'
     ctx.strokeStyle = 'rgba(169,124,58,0.28)'
     ctx.lineWidth   = 0.8
-    roundRect(pX, pillY, pillW, pillH2, 4); ctx.fill(); ctx.stroke()
+    roundRect(pX, pY, pillW, pillH2, 4); ctx.fill(); ctx.stroke()
     ctx.fillStyle    = 'rgba(242,232,213,0.68)'
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText(p, pX + pillW / 2, pillY + pillH2 / 2)
+    ctx.fillText(pills[pi], pX + pillW / 2, pY + pillH2 / 2)
     ctx.restore()
-    pX += pillW + pillGap
   }
+  const pillRows   = Math.ceil(pills.length / pillsPerRow)
+  const pillBlockH = pillRows * pillH2 + (pillRows - 1) * 6
 
   // ── Info lines ───────────────────────────────────────────────────────────
-  const infoY = pillY + pillH2 + 16
+  const infoY = pillY + pillBlockH + 16
   ;[
     { text: '💣  Dodge bombs — a hit costs one life', color: 'rgba(192,90,60,0.80)' },
     { text: '⚡  Catch 10 in a row to unlock a power-up   •   Streak multiplies your points', color: 'rgba(242,232,213,0.45)' },
@@ -1556,6 +1608,50 @@ function draw () {
       ctx.fill()
       ctx.restore()
     }
+
+    // Deep Freeze: ice-crystal overlay
+    if (bombsFrozen) {
+      // Frosted glass over bomb
+      ctx.save()
+      const icePulse = 0.55 + 0.35 * Math.abs(Math.sin(Date.now() / 220))
+      ctx.globalAlpha = icePulse
+      const ig = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.3, 0, cx, cy, r + 10)
+      ig.addColorStop(0,   'rgba(186,230,253,0.85)')
+      ig.addColorStop(0.6, 'rgba(56,189,248,0.55)')
+      ig.addColorStop(1,   'rgba(14,165,233,0)')
+      ctx.fillStyle = ig
+      ctx.beginPath()
+      ctx.arc(cx, cy, r + 10, 0, Math.PI * 2)
+      ctx.fill()
+      // Ice crack lines
+      ctx.globalAlpha = icePulse * 0.7
+      ctx.strokeStyle = 'rgba(224,242,254,0.9)'
+      ctx.lineWidth   = 1.2
+      ctx.lineCap     = 'round'
+      for (let ic = 0; ic < 6; ic++) {
+        const a = (ic / 6) * Math.PI * 2
+        ctx.beginPath()
+        ctx.moveTo(cx, cy)
+        ctx.lineTo(cx + Math.cos(a) * r * 0.95, cy + Math.sin(a) * r * 0.95)
+        ctx.stroke()
+        // Branch at ~60%
+        const bx = cx + Math.cos(a) * r * 0.55
+        const by = cy + Math.sin(a) * r * 0.55
+        ctx.beginPath()
+        ctx.moveTo(bx, by)
+        ctx.lineTo(bx + Math.cos(a + 0.6) * r * 0.35, by + Math.sin(a + 0.6) * r * 0.35)
+        ctx.stroke()
+      }
+      // Snowflake emoji centred
+      ctx.globalAlpha = icePulse
+      ctx.textAlign    = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.font         = `${Math.round(r * 1.1)}px serif`
+      ctx.shadowColor  = '#bae6fd'
+      ctx.shadowBlur   = 16
+      ctx.fillText('❄️', cx, cy)
+      ctx.restore()
+    }
   }
 
   // Cart
@@ -1693,6 +1789,90 @@ function draw () {
       ctx.fillStyle = `rgba(255,255,255,${burst * 0.18})`
       ctx.fillRect(0, 0, WIDTH, HEIGHT)
     }
+  }
+
+  // Deep Freeze persistent frost effect
+  if (bombsFrozen) {
+    const now = Date.now()
+    const fp  = activePowerUp ? activePowerUp.framesLeft / activePowerUp.maxFrames : 0
+    const iceAlpha = 0.28 + 0.08 * Math.abs(Math.sin(now / 400))
+
+    // Frost vignette — ice blue border sweep
+    ctx.save()
+    const fv = ctx.createRadialGradient(WIDTH / 2, HEIGHT / 2, HEIGHT * 0.22, WIDTH / 2, HEIGHT / 2, HEIGHT * 0.88)
+    fv.addColorStop(0,   'rgba(186,230,253,0)')
+    fv.addColorStop(0.7, `rgba(56,189,248,${iceAlpha * 0.5})`)
+    fv.addColorStop(1,   `rgba(14,165,233,${iceAlpha})`)
+    ctx.fillStyle = fv
+    ctx.fillRect(0, 0, WIDTH, HEIGHT)
+    ctx.restore()
+
+    // Cryo-flash burst on activation
+    if (freezeFlashFrames > 0) {
+      const bp = freezeFlashFrames / 30
+      ctx.save()
+      ctx.fillStyle = `rgba(186,230,253,${bp * 0.45})`
+      ctx.fillRect(0, 0, WIDTH, HEIGHT)
+      ctx.restore()
+    }
+
+    // Ice crystal shards at all four corners
+    const corners = [[0, 0], [WIDTH, 0], [0, HEIGHT], [WIDTH, HEIGHT]]
+    corners.forEach(([ox, oy]) => {
+      ctx.save()
+      ctx.translate(ox, oy)
+      const flipX = ox === WIDTH ? -1 : 1
+      const flipY = oy === HEIGHT ? -1 : 1
+      ctx.scale(flipX, flipY)
+      const crystalAlpha = 0.45 + 0.2 * Math.abs(Math.sin(now / 600))
+      ctx.globalAlpha = crystalAlpha
+      ctx.strokeStyle = 'rgba(224,242,254,0.9)'
+      ctx.lineWidth   = 1.5
+      ctx.lineCap     = 'round'
+      // Main spike arms radiating from corner
+      const arms = 5
+      for (let a = 0; a < arms; a++) {
+        const baseAngle = (a / (arms - 1)) * (Math.PI / 2)
+        const len = 55 + a % 2 * 30
+        const ex  = Math.cos(baseAngle) * len
+        const ey  = Math.sin(baseAngle) * len
+        ctx.beginPath()
+        ctx.moveTo(0, 0)
+        ctx.lineTo(ex, ey)
+        ctx.stroke()
+        // Side branches at 30% and 65%
+        ;[0.3, 0.65].forEach(t => {
+          const bx   = ex * t
+          const by   = ey * t
+          const bLen = len * 0.28
+          const ba   = baseAngle + Math.PI / 5
+          ctx.beginPath()
+          ctx.moveTo(bx, by)
+          ctx.lineTo(bx + Math.cos(ba) * bLen, by + Math.sin(ba) * bLen)
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.moveTo(bx, by)
+          ctx.lineTo(bx + Math.cos(baseAngle - Math.PI / 5) * bLen, by + Math.sin(baseAngle - Math.PI / 5) * bLen)
+          ctx.stroke()
+        })
+      }
+      // Tiny diamond facet at corner
+      ctx.fillStyle = 'rgba(186,230,253,0.7)'
+      ctx.beginPath()
+      ctx.moveTo(0, -8); ctx.lineTo(8, 0); ctx.lineTo(0, 8); ctx.lineTo(-8, 0)
+      ctx.closePath()
+      ctx.fill()
+      ctx.restore()
+    })
+
+    // Expire bar hint at bottom — drains as freeze runs out
+    ctx.save()
+    const barW = WIDTH * fp
+    ctx.fillStyle = 'rgba(56,189,248,0.22)'
+    ctx.fillRect(0, HEIGHT - 4, WIDTH, 4)
+    ctx.fillStyle = 'rgba(186,230,253,0.7)'
+    ctx.fillRect(0, HEIGHT - 4, barW, 4)
+    ctx.restore()
   }
 
   // ── Power-up banner ───────────────────────────────────────────────────
