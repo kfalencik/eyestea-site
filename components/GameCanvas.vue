@@ -79,6 +79,10 @@ const keys = { left: false, right: false }
 let gyroActive = false
 let gyroGamma  = 0
 
+// Touch drag state
+let dragActive   = false
+let dragLastX    = 0   // canvas-space X of last touchmove
+
 function onDeviceOrientation (e) {
   gyroGamma = e.gamma ?? 0
 }
@@ -224,12 +228,14 @@ function toggleMute () {
 function lockScroll () {
   document.body.style.overflow = 'hidden'
   document.documentElement.style.overflow = 'hidden'
+  document.body.classList.add('game-playing')
   if (canvasRef.value) canvasRef.value.style.cursor = 'none'
 }
 
 function unlockScroll () {
   document.body.style.overflow = ''
   document.documentElement.style.overflow = ''
+  document.body.classList.remove('game-playing')
   if (canvasRef.value) canvasRef.value.style.cursor = ''
 }
 
@@ -683,8 +689,8 @@ function update () {
   // Move cart — keyboard
   if (keys.left)  cart.x = Math.max(0, cart.x - CART_SPD * dt)
   if (keys.right) cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD * dt)
-  // Gyro override on mobile
-  if (gyroActive) {
+  // Gyro override on mobile — only when not dragging
+  if (gyroActive && !dragActive) {
     const DEAD = 5
     const tilt = gyroGamma
     if (Math.abs(tilt) > DEAD) {
@@ -1971,11 +1977,32 @@ function onTouchStart (e) {
   e.preventDefault()
   if (gameState === 'start' || gameState === 'gameover') {
     if (isOnCtaButton(e)) beginPlaying()
+    return
   }
+  if (gameState === 'playing' && e.touches.length > 0) {
+    const canvas = canvasRef.value
+    const rect   = canvas.getBoundingClientRect()
+    const scaleX = WIDTH / rect.width
+    dragLastX  = (e.touches[0].clientX - rect.left) * scaleX
+    dragActive = true
+  }
+}
+
+function onTouchMove (e) {
+  e.preventDefault()
+  if (gameState !== 'playing' || !dragActive || e.touches.length === 0) return
+  const canvas = canvasRef.value
+  const rect   = canvas.getBoundingClientRect()
+  const scaleX = WIDTH / rect.width
+  const newX   = (e.touches[0].clientX - rect.left) * scaleX
+  const delta  = newX - dragLastX
+  dragLastX    = newX
+  cart.x = Math.max(0, Math.min(WIDTH - cart.w, cart.x + delta))
 }
 
 function onTouchEnd (e) {
   e.preventDefault()
+  dragActive = false
 }
 
 // ── Keyboard input ────────────────────────────────────────────────────────────
@@ -2000,6 +2027,7 @@ onMounted(() => {
   isTouchDevice.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
   canvasRef.value.addEventListener('click',       onClick)
   canvasRef.value.addEventListener('touchstart',  onTouchStart,  { passive: false })
+  canvasRef.value.addEventListener('touchmove',   onTouchMove,   { passive: false })
   canvasRef.value.addEventListener('touchend',    onTouchEnd,    { passive: false })
   canvasRef.value.addEventListener('touchcancel', onTouchEnd,    { passive: false })
   window.addEventListener('keydown',          onKeyDown)
@@ -2016,6 +2044,7 @@ onUnmounted(() => {
   if (audioCtx) { audioCtx.close(); audioCtx = null }
   canvasRef.value?.removeEventListener('click',       onClick)
   canvasRef.value?.removeEventListener('touchstart',  onTouchStart)
+  canvasRef.value?.removeEventListener('touchmove',   onTouchMove)
   canvasRef.value?.removeEventListener('touchend',    onTouchEnd)
   canvasRef.value?.removeEventListener('touchcancel', onTouchEnd)
   window.removeEventListener('keydown',           onKeyDown)

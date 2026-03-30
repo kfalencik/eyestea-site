@@ -61,4 +61,8 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 .nav-bar--hidden {
   transform: translateY(-110%);
 }
+
+:global(body.game-playing) .nav-bar {
+  transform: translateY(-110%);
+}
 </style>
