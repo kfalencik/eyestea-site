@@ -153,6 +153,13 @@ let score = 0
 let missed = 0
 const caughtLog = []   // recent catch types for HUD icons
 
+// End-of-run stats
+let totalCaught  = 0
+let goldenCaught = 0
+let bestCombo    = 0
+let bombsHit     = 0
+let powerUpsUsed = 0
+
 // Combo, difficulty & effects
 let combo               = 0
 let comboTimer          = 0       // frames until streak expires
@@ -437,6 +444,7 @@ function deactivatePowerUp () {
 }
 
 function activatePowerUp (pu) {
+  powerUpsUsed++
   if (activePowerUp) deactivatePowerUp()
   const frames  = pu.frames > 0 ? pu.frames : 180
   activePowerUp = { ...pu, framesLeft: frames, maxFrames: frames }
@@ -580,6 +588,11 @@ function beginPlaying () {
   score               = 0
   missed              = 0
   combo               = 0
+  totalCaught         = 0
+  goldenCaught        = 0
+  bestCombo           = 0
+  bombsHit            = 0
+  powerUpsUsed        = 0
   comboTimer          = 0
   powerUpProgress     = 0
   difficultyTimer     = 0
@@ -761,8 +774,9 @@ function update () {
           const penalty = Math.min(score, 10)
           score   = Math.max(0, score - penalty)
           missed  = Math.min(MAX_MISSED, missed + 5)
+          bombsHit++
           playBombHit()
-          floatTexts.push({ text: `💥 −${penalty} PTS, −5 LIVES!`, x: hCX, y: h.y - 20, life: 80, maxLife: 80, color: '#ef4444', size: 22 })
+          floatTexts.push({ text: `💥 −${penalty} PTS, −1 LIFE!`, x: hCX, y: h.y - 20, life: 80, maxLife: 80, color: '#ef4444', size: 22 })
           if (missed >= MAX_MISSED) {
             gameState = 'gameover'
             stopMusic()
@@ -815,6 +829,9 @@ function update () {
     ) {
       c.caught = true
       combo++
+      totalCaught++
+      if (c.golden) goldenCaught++
+      if (combo > bestCombo) bestCombo = combo
       powerUpProgress++
       comboTimer = COMBO_WINDOW   // reset window on each catch
       streakMult  = Math.floor(combo / 10) + 1
@@ -1083,123 +1100,212 @@ function drawStartScreen () {
 }
 
 function drawGameOverScreen () {
-  ctx.drawImage(imgs.bg, 0, 0, WIDTH, HEIGHT)
+  const t = Date.now() / 1000
 
-  ctx.fillStyle = 'rgba(10,6,2,0.78)'
+  // ── Background (mirrors start screen) ────────────────────────────────────
+  ctx.drawImage(imgs.bg, 0, 0, WIDTH, HEIGHT)
+  const bgOv = ctx.createLinearGradient(0, 0, 0, HEIGHT)
+  bgOv.addColorStop(0,    'rgba(8,4,1,0.95)')
+  bgOv.addColorStop(0.45, 'rgba(8,4,1,0.82)')
+  bgOv.addColorStop(1,    'rgba(8,4,1,0.97)')
+  ctx.fillStyle = bgOv
   ctx.fillRect(0, 0, WIDTH, HEIGHT)
 
-  // ── Card ──────────────────────────────────────────────────────────
-  const cardW = 680
-  const cardH = 440
-  const cardX = (WIDTH  - cardW) / 2
-  const cardY = (HEIGHT - cardH) / 2
+  // ── Ambient glow orbs ────────────────────────────────────────────────────
+  ;[
+    { x: WIDTH * 0.20, y: HEIGHT * 0.50, r: 280, c: 'rgba(192,90,60,0.14)' },
+    { x: WIDTH * 0.80, y: HEIGHT * 0.45, r: 250, c: 'rgba(169,124,58,0.10)' },
+  ].forEach(o => {
+    const g = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, o.r)
+    g.addColorStop(0, o.c); g.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = g; ctx.fillRect(0, 0, WIDTH, HEIGHT)
+  })
 
-  ctx.save()
-  ctx.shadowColor = 'rgba(0,0,0,0.6)'
-  ctx.shadowBlur  = 48
-  ctx.fillStyle   = '#faf6ee'
-  roundRect(cardX, cardY, cardW, cardH, 10)
-  ctx.fill()
-  ctx.restore()
-
-  // Terracotta top rule
-  const goGrad = ctx.createLinearGradient(cardX, 0, cardX + cardW, 0)
-  goGrad.addColorStop(0,   'rgba(192,90,60,0)')
-  goGrad.addColorStop(0.3, 'rgba(192,90,60,1)')
-  goGrad.addColorStop(0.7, 'rgba(192,90,60,1)')
-  goGrad.addColorStop(1,   'rgba(192,90,60,0)')
-  ctx.fillStyle = goGrad
-  ctx.fillRect(cardX, cardY, cardW, 3)
-
-  // Title
-  ctx.save()
-  ctx.textAlign    = 'center'
-  ctx.textBaseline = 'top'
-  ctx.font         = 'bold 58px "Cormorant Garamond", serif'
-  ctx.fillStyle    = '#c05a3c'
-  ctx.fillText('Game Over', WIDTH / 2, cardY + 28)
-  ctx.restore()
-
-  // Score line
-  ctx.save()
-  ctx.textAlign    = 'center'
-  ctx.textBaseline = 'top'
-  ctx.font         = 'italic 22px "Cormorant Garamond", serif'
-  ctx.fillStyle    = 'rgba(26,14,6,0.6)'
-  ctx.fillText(`You caught ${score} can${score !== 1 ? 's' : ''}`, WIDTH / 2, cardY + 96)
-  ctx.restore()
-
-  // Divider
-  ctx.strokeStyle = 'rgba(169,124,58,0.3)'
-  ctx.lineWidth   = 1
-  ctx.beginPath()
-  ctx.moveTo(cardX + 60, cardY + 132)
-  ctx.lineTo(cardX + cardW - 60, cardY + 132)
-  ctx.stroke()
-
-  // ── Reward rows ───────────────────────────────────────────────────
-  const milestones = [
-    { threshold: 5,  emoji: '🛒', reward: '5% off your next order' },
-    { threshold: 10, emoji: '⭐', reward: 'Free can in your basket' },
-    { threshold: 20, emoji: '🎉', reward: 'Unlock a secret flavour' },
-  ]
-  const rowH   = 62
-  const startY = cardY + 148
-
-  milestones.forEach((m, i) => {
-    const ry       = startY + i * rowH
-    const unlocked = score >= m.threshold
-
+  // ── Drifting background cans (same as start) ─────────────────────────────
+  ;[
+    { x:  90, bY: 200, ph: 0.0,  img: 'peach',     sz: 52, al: 0.10, rot: -0.18 },
+    { x: 215, bY: 490, ph: 1.3,  img: 'raspberry', sz: 40, al: 0.08, rot:  0.22 },
+    { x:1080, bY: 215, ph: 0.7,  img: 'raspberry', sz: 52, al: 0.10, rot:  0.15 },
+    { x:1165, bY: 465, ph: 2.1,  img: 'peach',     sz: 40, al: 0.08, rot: -0.12 },
+    { x: 145, bY: 365, ph: 3.2,  img: 'raspberry', sz: 30, al: 0.06, rot:  0.30 },
+    { x:1115, bY: 345, ph: 1.9,  img: 'peach',     sz: 30, al: 0.06, rot: -0.24 },
+  ].forEach(c => {
     ctx.save()
-    ctx.globalAlpha = unlocked ? 1 : 0.35
-
-    if (unlocked) {
-      ctx.fillStyle = 'rgba(169,124,58,0.08)'
-      ctx.fillRect(cardX + 40, ry, cardW - 80, rowH - 6)
-    }
-
-    const midY = ry + (rowH - 6) / 2
-    ctx.font         = '22px serif'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(unlocked ? '✅' : '❌', cardX + 54, midY)
-    ctx.fillText(m.emoji, cardX + 94, midY)
-
-    ctx.font      = 'bold 17px "Cormorant Garamond", serif'
-    ctx.fillStyle = '#1a0e06'
-    ctx.fillText(`${m.threshold} cans`, cardX + 136, midY - 9)
-
-    ctx.font      = 'italic 15px "Cormorant Garamond", serif'
-    ctx.fillStyle = unlocked ? '#c05a3c' : '#1a0e06'
-    ctx.fillText('→  ' + m.reward, cardX + 136, midY + 13)
-
+    ctx.globalAlpha = c.al
+    ctx.translate(c.x, c.bY + Math.sin(t * 0.7 + c.ph) * 16)
+    ctx.rotate(c.rot + Math.sin(t * 0.45 + c.ph) * 0.05)
+    ctx.drawImage(imgs[c.img], -c.sz / 2, -c.sz, c.sz, c.sz * 2)
     ctx.restore()
   })
 
-  // Divider
-  ctx.strokeStyle = 'rgba(169,124,58,0.3)'
-  ctx.lineWidth   = 1
-  ctx.beginPath()
-  ctx.moveTo(cardX + 60, cardY + cardH - 78)
-  ctx.lineTo(cardX + cardW - 60, cardY + cardH - 78)
-  ctx.stroke()
+  const CX = WIDTH / 2
 
-  // Play Again button
-  const btnW = 220
-  const btnH = 46
-  const btnX = (WIDTH  - btnW) / 2
-  const btnY = cardY + cardH - 60
-
-  ctx.fillStyle = '#1a0e06'
-  roundRect(btnX, btnY, btnW, btnH, 4)
-  ctx.fill()
-
+  // ── GAME OVER title ───────────────────────────────────────────────────────
+  const titleY = 38
   ctx.save()
   ctx.textAlign    = 'center'
+  ctx.textBaseline = 'top'
+  ctx.font         = 'bold 88px "Cormorant Garamond", serif'
+  ctx.shadowColor  = '#c05a3c'
+  ctx.shadowBlur   = 36
+  ctx.fillStyle    = '#f2e8d5'
+  ctx.fillText('GAME OVER', CX, titleY)
+  // Shimmer
+  const shimX = ((t * 0.38) % 1.35 - 0.15) * WIDTH
+  const shim  = ctx.createLinearGradient(shimX - 120, 0, shimX + 120, 0)
+  shim.addColorStop(0, 'rgba(255,255,255,0)'); shim.addColorStop(0.5, 'rgba(255,255,255,0.18)'); shim.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = shim; ctx.shadowBlur = 0
+  ctx.fillText('GAME OVER', CX, titleY)
+  ctx.restore()
+
+  // Subtitle score
+  ctx.save()
+  ctx.textAlign    = 'center'
+  ctx.textBaseline = 'top'
+  ctx.font         = 'italic 26px "Cormorant Garamond", serif'
+  ctx.fillStyle    = 'rgba(192,90,60,0.90)'
+  ctx.fillText(`${score} point${score !== 1 ? 's' : ''} scored`, CX, titleY + 98)
+  ctx.restore()
+
+  // ── Brass rule with diamond ───────────────────────────────────────────────
+  const ruleY = titleY + 136
+  const ruleG = ctx.createLinearGradient(CX - 300, 0, CX + 300, 0)
+  ruleG.addColorStop(0,    'rgba(169,124,58,0)')
+  ruleG.addColorStop(0.25, 'rgba(169,124,58,0.8)')
+  ruleG.addColorStop(0.5,  'rgba(192,90,60,1)')
+  ruleG.addColorStop(0.75, 'rgba(169,124,58,0.8)')
+  ruleG.addColorStop(1,    'rgba(169,124,58,0)')
+  ctx.strokeStyle = ruleG; ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(CX - 300, ruleY); ctx.lineTo(CX + 300, ruleY); ctx.stroke()
+  ctx.save(); ctx.translate(CX, ruleY); ctx.rotate(Math.PI / 4)
+  ctx.fillStyle = '#a97c3a'; ctx.fillRect(-3.5, -3.5, 7, 7)
+  ctx.restore()
+
+  // ── Stats grid (3 × 2) ───────────────────────────────────────────────────
+  const survived = Math.floor(difficultyTimer / 60)
+  const mins     = Math.floor(survived / 60)
+  const secs     = survived % 60
+  const timeStr  = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
+
+  const statItems = [
+    { label: 'CANS CAUGHT',   value: totalCaught,                  icon: '🥤' },
+    { label: 'BEST STREAK',   value: `×${bestCombo}`,              icon: '🔥' },
+    { label: 'GOLDEN CANS',   value: goldenCaught,                 icon: '★'  },
+    { label: 'POWER-UPS',     value: powerUpsUsed,                 icon: '⚡' },
+    { label: 'BOMBS HIT',     value: bombsHit,                     icon: '💥' },
+    { label: 'TIME SURVIVED', value: timeStr,                      icon: '⏱'  },
+  ]
+
+  const cellW = 196, cellH = 72, cellGap = 12
+  const gridW = 3 * cellW + 2 * cellGap
+  const gridX = CX - gridW / 2
+  const gridY = ruleY + 16
+
+  statItems.forEach((s, i) => {
+    const col  = i % 3
+    const row  = Math.floor(i / 3)
+    const cx2  = gridX + col * (cellW + cellGap)
+    const cy2  = gridY + row * (cellH + cellGap)
+
+    ctx.save()
+    // Card bg
+    const cg = ctx.createLinearGradient(cx2, cy2, cx2, cy2 + cellH)
+    cg.addColorStop(0, 'rgba(42,26,10,0.72)')
+    cg.addColorStop(1, 'rgba(20,10,4,0.72)')
+    ctx.fillStyle = cg
+    ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 12
+    roundRect(cx2, cy2, cellW, cellH, 6); ctx.fill()
+    ctx.shadowBlur = 0
+
+    // Gold border
+    const highlight = (s.label === 'GOLDEN CANS' && goldenCaught > 0) ||
+                      (s.label === 'BEST STREAK'  && bestCombo   >= 20)
+    ctx.strokeStyle = highlight ? 'rgba(255,215,0,0.55)' : 'rgba(169,124,58,0.30)'
+    ctx.lineWidth   = highlight ? 1.5 : 1
+    roundRect(cx2, cy2, cellW, cellH, 6); ctx.stroke()
+
+    // Icon
+    ctx.font = '20px serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top'
+    ctx.fillStyle = 'rgba(255,255,255,0.70)'
+    ctx.fillText(s.icon, cx2 + 12, cy2 + 10)
+
+    // Value
+    ctx.font      = 'bold 28px "Cormorant Garamond", serif'
+    ctx.fillStyle = highlight ? '#ffd700' : '#f2e8d5'
+    ctx.textAlign    = 'right'
+    ctx.textBaseline = 'top'
+    if (highlight) { ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 8 }
+    ctx.fillText(s.value, cx2 + cellW - 12, cy2 + 8)
+    ctx.shadowBlur = 0
+
+    // Label
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = 'rgba(169,124,58,0.70)'
+    ctx.fillText(s.label, cx2 + cellW - 12, cy2 + cellH - 18)
+    ctx.restore()
+  })
+
+  // ── Reward rows ───────────────────────────────────────────────────────────
+  const milestones = [
+    { threshold: 5,  emoji: '🛒', reward: '5% off your next order' },
+    { threshold: 10, emoji: '⭐', reward: 'Free can in your basket' },
+    { threshold: 20, emoji: '🎁', reward: 'Unlock a secret flavour' },
+  ]
+  const rewardY  = gridY + 2 * (cellH + cellGap) + 14
+  const rewardW  = gridW
+  const rewardX  = gridX
+  const rowH     = 38
+
+  milestones.forEach((m, i) => {
+    const ry       = rewardY + i * (rowH + 4)
+    const unlocked = score >= m.threshold
+    ctx.save()
+    ctx.globalAlpha = unlocked ? 1 : 0.32
+    if (unlocked) {
+      ctx.fillStyle = 'rgba(169,124,58,0.10)'
+      roundRect(rewardX, ry, rewardW, rowH, 4); ctx.fill()
+      ctx.strokeStyle = 'rgba(169,124,58,0.25)'; ctx.lineWidth = 0.8
+      roundRect(rewardX, ry, rewardW, rowH, 4); ctx.stroke()
+    }
+    const midY = ry + rowH / 2
+    ctx.font = '16px serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+    ctx.fillStyle = '#f2e8d5'
+    ctx.fillText(unlocked ? '✅' : '○', rewardX + 14, midY)
+    ctx.fillText(m.emoji, rewardX + 44, midY)
+    ctx.font      = `bold 15px "Cormorant Garamond", serif`
+    ctx.fillStyle = '#f2e8d5'
+    ctx.fillText(`${m.threshold} pts`, rewardX + 76, midY - 7)
+    ctx.font      = 'italic 13px "Cormorant Garamond", serif'
+    ctx.fillStyle = unlocked ? '#c05a3c' : 'rgba(242,232,213,0.5)'
+    ctx.fillText('→  ' + m.reward, rewardX + 76, midY + 9)
+    ctx.restore()
+  })
+
+  // ── Pulsing CTA button (matches start screen) ─────────────────────────────
+  const pulse  = 0.80 + 0.20 * Math.abs(Math.sin(t * 1.9))
+  const btnW   = 320, btnH = 54
+  const btnX   = CX - btnW / 2
+  const btnY   = HEIGHT - 72
+
+  ctx.save()
+  ctx.shadowColor = `rgba(169,124,58,${0.55 * pulse})`
+  ctx.shadowBlur  = 26 * pulse
+  const bG = ctx.createLinearGradient(btnX, btnY, btnX + btnW, btnY + btnH)
+  bG.addColorStop(0, '#2a1a0a'); bG.addColorStop(1, '#1a0e06')
+  ctx.fillStyle = bG
+  roundRect(btnX, btnY, btnW, btnH, 6); ctx.fill()
+  const bBord = ctx.createLinearGradient(btnX, 0, btnX + btnW, 0)
+  bBord.addColorStop(0,   'rgba(169,124,58,0.18)')
+  bBord.addColorStop(0.5, `rgba(169,124,58,${0.75 * pulse})`)
+  bBord.addColorStop(1,   'rgba(169,124,58,0.18)')
+  ctx.strokeStyle = bBord; ctx.lineWidth = 1.5
+  roundRect(btnX, btnY, btnW, btnH, 6); ctx.stroke()
+  ctx.textAlign    = 'center'
   ctx.textBaseline = 'middle'
-  ctx.font         = 'bold 16px "Cormorant Garamond", serif'
-  ctx.fillStyle    = '#faf6ee'
-  ctx.fillText('PLAY AGAIN', WIDTH / 2, btnY + btnH / 2)
+  ctx.font         = 'bold 15px monospace'
+  ctx.fillStyle    = `rgba(242,232,213,${0.72 + 0.28 * pulse})`
+  ctx.shadowColor  = 'transparent'
+  ctx.fillText('▶   PLAY AGAIN', CX, btnY + btnH / 2)
   ctx.restore()
 }
 
