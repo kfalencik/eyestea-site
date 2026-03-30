@@ -221,6 +221,18 @@ function toggleMute () {
   if (masterGain) masterGain.gain.value = isMuted.value ? 0 : 1
 }
 
+function lockScroll () {
+  document.body.style.overflow = 'hidden'
+  document.documentElement.style.overflow = 'hidden'
+  if (canvasRef.value) canvasRef.value.style.cursor = 'none'
+}
+
+function unlockScroll () {
+  document.body.style.overflow = ''
+  document.documentElement.style.overflow = ''
+  if (canvasRef.value) canvasRef.value.style.cursor = ''
+}
+
 function goToStart () {
   stopMusic()
   if (activePowerUp) deactivatePowerUp()
@@ -229,6 +241,7 @@ function goToStart () {
   particles.length = 0
   floatTexts.length = 0
   gameState = 'start'
+  unlockScroll()
 }
 
 function playCatch (comboVal = 1) {
@@ -618,6 +631,11 @@ function beginPlaying () {
   spawnTimer          = 0
   cart.x              = WIDTH / 2 - CART_W / 2
   cart.w              = CART_W
+  // Scroll canvas into view and lock page scrolling
+  if (canvasRef.value) {
+    canvasRef.value.closest('.game-wrapper')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  lockScroll()
   startMusic()
   requestGyro()
 }
@@ -781,6 +799,7 @@ function update () {
             gameState = 'gameover'
             stopMusic()
             playGameOverSound()
+            unlockScroll()
           }
         }
       }
@@ -2004,6 +2023,7 @@ onUnmounted(() => {
   window.removeEventListener('resize',             checkOrientation)
   window.removeEventListener('orientationchange',  checkOrientation)
   window.removeEventListener('deviceorientation',  onDeviceOrientation)
+  unlockScroll()
 })
 </script>
 
