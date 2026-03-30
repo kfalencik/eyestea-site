@@ -39,18 +39,59 @@
         {{ toastText }}
       </div>
     </Transition>
+
+    <!-- Name-entry overlay (shown immediately on game over) -->
+    <Transition name="name-entry-fade">
+      <div v-if="showNameEntry" class="name-entry-overlay" @keydown.esc.prevent="skipNameEntry">
+        <div class="name-entry-card">
+          <p class="name-entry-eyebrow">GAME OVER</p>
+          <h2 class="name-entry-title">Enter your name</h2>
+          <p class="name-entry-sub">for the leaderboard <span class="name-entry-limit">&nbsp;(max 10 characters)</span></p>
+          <input
+            ref="nameInputRef"
+            v-model="playerName"
+            class="name-entry-input"
+            type="text"
+            maxlength="10"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="YOURNAME"
+            :disabled="nameSaving || nameSaved"
+            @keydown.enter.prevent="submitName"
+          />
+          <p v-if="nameError" class="name-entry-error">{{ nameError }}</p>
+          <div class="name-entry-actions">
+            <button class="name-btn name-btn--skip" :disabled="nameSaving" @click="skipNameEntry">Skip</button>
+            <button class="name-btn name-btn--save" :disabled="nameSaving || nameSaved || !playerName.trim()" @click="submitName">
+              <span v-if="nameSaving">Saving…</span>
+              <span v-else-if="nameSaved">✓ Saved!</span>
+              <span v-else>Save score</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { saveScore } from '~/composables/useFirebase.js'
 
-const isPortrait    = ref(false)
-const isTouchDevice = ref(false)
-const isPlaying     = ref(false)
-const showToast     = ref(false)
-const toastText     = ref('')
-let   toastTimer    = null
+const isPortrait     = ref(false)
+const isTouchDevice  = ref(false)
+const isPlaying      = ref(false)
+const showToast      = ref(false)
+const toastText      = ref('')
+let   toastTimer     = null
+
+// ── Name-entry overlay ───────────────────────────────────────────────────────
+const showNameEntry  = ref(false)
+const playerName     = ref('')
+const nameInputRef   = ref(null)
+const nameSaving     = ref(false)
+const nameSaved      = ref(false)
+const nameError      = ref('')
 
 function checkOrientation () {
   const w = window.innerWidth
@@ -311,6 +352,47 @@ function applyDiscount () {
   showToast.value = true
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => { showToast.value = false }, 5000)
+}
+
+// ── Name entry / leaderboard save ─────────────────────────────────────────────
+function triggerNameEntry () {
+  playerName.value  = ''
+  nameError.value   = ''
+  nameSaving.value  = false
+  nameSaved.value   = false
+  showNameEntry.value = true
+  nextTick(() => nameInputRef.value?.focus())
+}
+
+async function submitName () {
+  const name = playerName.value.trim()
+  if (!name) { nameError.value = 'Please enter a name.'; return }
+  nameError.value  = ''
+  nameSaving.value = true
+  try {
+    const stats = {
+      score,
+      totalCaught,
+      goldenCaught,
+      bestCombo,
+      bombsHit,
+      powerUpsUsed,
+      timeSurvived: Math.floor(difficultyTimer / 60),
+      earnedDiscount,
+    }
+    await saveScore(name, stats)
+    nameSaved.value = true
+    setTimeout(() => { showNameEntry.value = false }, 1200)
+  } catch (err) {
+    console.error('[GameCanvas] saveScore error:', err)
+    nameError.value = 'Could not save — check your connection.'
+  } finally {
+    nameSaving.value = false
+  }
+}
+
+function skipNameEntry () {
+  showNameEntry.value = false
 }
 
 function playCatch (comboVal = 1) {
@@ -997,6 +1079,7 @@ function update () {
             stopMusic()
             playGameOverSound()
             unlockScroll()
+            triggerNameEntry()
           }
         }
       }
@@ -2813,4 +2896,135 @@ onUnmounted(() => {
 .toast-slide-leave-active  { transition: all 0.35s ease-in; }
 .toast-slide-enter-from    { opacity: 0; transform: translateX(-50%) translateY(20px) scale(0.88); }
 .toast-slide-leave-to      { opacity: 0; transform: translateX(-50%) translateY(20px) scale(0.88); }
+
+/* ── Name-entry overlay ──────────────────────────────────────────────────── */
+.name-entry-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 4, 1, 0.82);
+  backdrop-filter: blur(6px);
+  border-radius: 6px;
+}
+
+.name-entry-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 48px 36px;
+  background: linear-gradient(160deg, rgba(42,26,10,0.97) 0%, rgba(20,10,4,0.97) 100%);
+  border: 1px solid rgba(169,124,58,0.45);
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.65), 0 0 40px rgba(169,124,58,0.12);
+  min-width: 340px;
+  max-width: 90vw;
+  text-align: center;
+}
+
+.name-entry-eyebrow {
+  font-family: monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  color: rgba(192,90,60,0.85);
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.name-entry-title {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: #f2e8d5;
+  margin: 0;
+  line-height: 1.1;
+}
+
+.name-entry-sub {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 1rem;
+  font-style: italic;
+  color: rgba(242,232,213,0.48);
+  margin: 0 0 6px;
+}
+
+.name-entry-limit {
+  color: rgba(169,124,58,0.70);
+}
+
+.name-entry-input {
+  width: 100%;
+  padding: 12px 18px;
+  background: rgba(8,4,1,0.75);
+  border: 1px solid rgba(169,124,58,0.50);
+  border-radius: 6px;
+  color: #f2e8d5;
+  font-family: monospace;
+  font-size: 1.3rem;
+  letter-spacing: 0.12em;
+  text-align: center;
+  text-transform: uppercase;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-sizing: border-box;
+}
+.name-entry-input::placeholder { color: rgba(242,232,213,0.22); }
+.name-entry-input:focus {
+  border-color: rgba(169,124,58,0.85);
+  box-shadow: 0 0 0 3px rgba(169,124,58,0.15);
+}
+.name-entry-input:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.name-entry-error {
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: #ef4444;
+  margin: 0;
+  min-height: 1em;
+}
+
+.name-entry-actions {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.name-btn {
+  flex: 1;
+  padding: 11px 0;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+  border: 1px solid;
+}
+.name-btn:disabled { opacity: 0.42; cursor: not-allowed; }
+.name-btn:not(:disabled):active { transform: scale(0.96); }
+
+.name-btn--skip {
+  background: transparent;
+  border-color: rgba(169,124,58,0.30);
+  color: rgba(242,232,213,0.55);
+}
+.name-btn--skip:hover:not(:disabled) { border-color: rgba(169,124,58,0.60); color: rgba(242,232,213,0.80); }
+
+.name-btn--save {
+  background: linear-gradient(135deg, #2a1a0a, #1a0e06);
+  border-color: rgba(169,124,58,0.65);
+  color: #f2e8d5;
+  box-shadow: 0 0 14px rgba(169,124,58,0.20);
+}
+.name-btn--save:hover:not(:disabled) { border-color: rgba(192,90,60,0.85); box-shadow: 0 0 20px rgba(192,90,60,0.28); }
+
+.name-entry-fade-enter-active { transition: all 0.35s cubic-bezier(0.34, 1.3, 0.64, 1); }
+.name-entry-fade-leave-active  { transition: all 0.25s ease-in; }
+.name-entry-fade-enter-from    { opacity: 0; transform: scale(0.90); }
+.name-entry-fade-leave-to      { opacity: 0; transform: scale(0.94); }
 </style>
