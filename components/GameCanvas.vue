@@ -11,7 +11,7 @@
       </div>
     </Transition>
     <div class="canvas-frame">
-      <canvas ref="canvasRef" :width="WIDTH" :height="HEIGHT" class="game-canvas" />
+      <canvas ref="canvasRef" :width="canvasWidth" :height="canvasHeight" class="game-canvas" />
       <!-- Mute button -->
       <button class="mute-btn" @click="toggleMute" :aria-label="isMuted ? 'Unmute' : 'Mute'">
         <svg v-if="!isMuted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -42,8 +42,35 @@ function checkOrientation () {
 }
 
 // ── Canvas dimensions ─────────────────────────────────────────────────────────
-const WIDTH  = 1280
-const HEIGHT = 720
+const WIDTH  = 2220
+const HEIGHT = 1024
+
+// ── Dynamic display size + draw transform ────────────────────────────────────
+const canvasWidth  = ref(WIDTH)
+const canvasHeight = ref(HEIGHT)
+let drawScale   = 1
+let drawOffsetX = 0
+let drawOffsetY = 0
+
+function computeDimensions () {
+  const mobile = isTouchDevice.value
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const navH = mobile ? 0 : 80
+  const MAX_W = 1400
+
+  // Scale game world to fit within available space, respecting max width
+  const availW = Math.min(vw, MAX_W)
+  const availH = vh - navH
+  const s = Math.min(availW / WIDTH, availH / HEIGHT)
+  drawScale   = s
+  drawOffsetX = 0
+  drawOffsetY = 0
+
+  // Canvas is exactly the size of the scaled game — no letterbox bars
+  canvasWidth.value  = Math.round(WIDTH  * s)
+  canvasHeight.value = Math.round(HEIGHT * s)
+}
 
 // ── Sprite sizes ──────────────────────────────────────────────────────────────
 const CART_W   = 200
@@ -593,6 +620,9 @@ function loop (now) {
   lastTime  = now
   dt = raw / 16.6667  // 1.0 = exactly 60fps; 2.0 = 30fps, etc.
 
+  // Map game-world coords (2220×1024) into the display canvas
+  ctx.setTransform(drawScale, 0, 0, drawScale, drawOffsetX, drawOffsetY)
+
   if (gameState === 'start') {
     drawStartScreen()
   } else if (gameState === 'gameover') {
@@ -601,6 +631,8 @@ function loop (now) {
     update()
     draw()
   }
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
   rafId = requestAnimationFrame(loop)
 }
 
@@ -1777,17 +1809,23 @@ function onClick () {
 onMounted(() => {
   ctx = canvasRef.value.getContext('2d')
   isTouchDevice.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+  computeDimensions()
   canvasRef.value.addEventListener('click',       onClick)
   canvasRef.value.addEventListener('touchstart',  onTouchStart,  { passive: false })
   canvasRef.value.addEventListener('touchend',    onTouchEnd,    { passive: false })
   canvasRef.value.addEventListener('touchcancel', onTouchEnd,    { passive: false })
-  window.addEventListener('keydown',          onKeyDown)
-  window.addEventListener('keyup',            onKeyUp)
-  window.addEventListener('resize',           checkOrientation)
-  window.addEventListener('orientationchange',checkOrientation)
+  window.addEventListener('keydown',           onKeyDown)
+  window.addEventListener('keyup',             onKeyUp)
+  window.addEventListener('resize',            onResize)
+  window.addEventListener('orientationchange', onResize)
   checkOrientation()
   loadImages()
 })
+
+function onResize () {
+  checkOrientation()
+  computeDimensions()
+}
 
 onUnmounted(() => {
   if (rafId) cancelAnimationFrame(rafId)
@@ -1802,6 +1840,8 @@ onUnmounted(() => {
   window.removeEventListener('resize',             checkOrientation)
   window.removeEventListener('orientationchange',  checkOrientation)
   window.removeEventListener('deviceorientation',  onDeviceOrientation)
+  window.removeEventListener('resize',             onResize)
+  window.removeEventListener('orientationchange',  onResize)
 })
 </script>
 
@@ -1809,42 +1849,40 @@ onUnmounted(() => {
 .game-wrapper {
   position: relative;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   width: 100%;
-  padding: 24px 0;
-  margin-top: 50px;
+  /* On desktop, push below the fixed navbar */
+  margin-top: 80px;
 }
 
-/* In fullscreen mode, fill the screen and centre the canvas */
-.game-wrapper:fullscreen,
-.game-wrapper:-webkit-full-screen {
-  background: #1a0e06;
-  padding: 0;
-  margin: 0;
-  width: 100vw;
-  height: 100vh;
-}
-
-/* Canvas frame — sizes to the canvas so children can be positioned relative to it */
+/* Canvas frame — no fixed dimensions; canvas element determines its own size */
 .canvas-frame {
   position: relative;
   display: inline-block;
-  line-height: 0; /* collapse whitespace gap below canvas */
-  width: min(1280px, 100vw, calc((100vh - 80px) * 1.7778));
+  line-height: 0;
 }
 
-/* Canvas scales down proportionally to fit both viewport width & height */
+/* Canvas display — 1:1 with its buffer; JS sets width/height attributes */
 .game-canvas {
   display: block;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 16 / 9;
   image-rendering: pixelated;
   border: 3px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
-  touch-action: none; /* prevent browser scroll/zoom on canvas touch */
+  touch-action: none;
+}
+
+/* Mobile — no chrome, flush to screen edges */
+@media (max-width: 900px) {
+  .game-wrapper {
+    margin-top: 0;
+  }
+  .game-canvas {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
 }
 
 /* ── Portrait overlay ────────────────────────────────────────────────────── */
@@ -1923,22 +1961,6 @@ onUnmounted(() => {
   width: 18px;
   height: 18px;
   pointer-events: none;
-}
-
-/* Mobile landscape — fill the full screen */
-@media (max-width: 900px) and (orientation: landscape) {
-  .game-wrapper {
-    padding: 0;
-    margin-top: 0;
-  }
-  .canvas-frame {
-    width: min(100vw, calc(100dvh * 1.7778));
-  }
-  .game-canvas {
-    border: none;
-    border-radius: 0;
-    box-shadow: none;
-  }
 }
 
 /* ── Touch D-pad buttons ──────────────────────────────────────────────────── */
