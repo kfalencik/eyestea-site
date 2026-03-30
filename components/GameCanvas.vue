@@ -10,34 +10,22 @@
         </div>
       </div>
     </Transition>
-    <canvas ref="canvasRef" :width="WIDTH" :height="HEIGHT" class="game-canvas" />
-    <!-- Touch L/R buttons (only on touch devices) -->
-    <template v-if="isTouchDevice">
-      <button
-        class="touch-btn touch-btn--left"
-        @pointerdown.prevent="keys.left = true"
-        @pointerup.prevent="keys.left = false"
-        @pointerleave="keys.left = false"
-        @pointercancel="keys.left = false"
-        aria-label="Move left"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="15 18 9 12 15 6"/>
+    <div class="canvas-frame">
+      <canvas ref="canvasRef" :width="WIDTH" :height="HEIGHT" class="game-canvas" />
+      <!-- Mute button -->
+      <button class="mute-btn" @click="toggleMute" :aria-label="isMuted ? 'Unmute' : 'Mute'">
+        <svg v-if="!isMuted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>
+        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <line x1="23" y1="9" x2="17" y2="15"/>
+          <line x1="17" y1="9" x2="23" y2="15"/>
         </svg>
       </button>
-      <button
-        class="touch-btn touch-btn--right"
-        @pointerdown.prevent="keys.right = true"
-        @pointerup.prevent="keys.right = false"
-        @pointerleave="keys.right = false"
-        @pointercancel="keys.right = false"
-        aria-label="Move right"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="9 18 15 12 9 6"/>
-        </svg>
-      </button>
-    </template>
+    </div>
   </div>
 </template>
 
@@ -79,6 +67,32 @@ const TOTAL_IMGS = 6  // background, cart, peach, raspberry + crushed variants
 let gameState = 'start'
 
 const keys = { left: false, right: false }
+
+// Gyroscope state
+let gyroActive = false
+let gyroGamma  = 0
+
+function onDeviceOrientation (e) {
+  gyroGamma = e.gamma ?? 0
+}
+
+async function requestGyro () {
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS 13+ requires explicit permission via a user gesture
+    try {
+      const perm = await DeviceOrientationEvent.requestPermission()
+      if (perm === 'granted') {
+        window.addEventListener('deviceorientation', onDeviceOrientation)
+        gyroActive = true
+      }
+    } catch (_) { /* permission denied or unavailable */ }
+  } else if (typeof DeviceOrientationEvent !== 'undefined') {
+    // Android / desktop — no permission required
+    window.addEventListener('deviceorientation', onDeviceOrientation)
+    gyroActive = true
+  }
+}
 
 // Cart lives at bottom of canvas
 const cart = {
@@ -170,11 +184,23 @@ let streakMult         = 1   // 1 / 2 / 3 based on combo tier
 let powerUpNextCombo   = 10
 
 // ── Audio (Web Audio API) ─────────────────────────────────────────────────────
-let audioCtx = null
+let audioCtx   = null
+let masterGain = null
+const isMuted  = ref(false)
 
 function ensureAudio () {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+  if (!audioCtx) {
+    audioCtx   = new (window.AudioContext || window.webkitAudioContext)()
+    masterGain = audioCtx.createGain()
+    masterGain.gain.value = isMuted.value ? 0 : 1
+    masterGain.connect(audioCtx.destination)
+  }
   if (audioCtx.state === 'suspended') audioCtx.resume()
+}
+
+function toggleMute () {
+  isMuted.value = !isMuted.value
+  if (masterGain) masterGain.gain.value = isMuted.value ? 0 : 1
 }
 
 function playCatch (comboVal = 1) {
@@ -184,7 +210,7 @@ function playCatch (comboVal = 1) {
   const t = audioCtx.currentTime
   const osc = audioCtx.createOscillator()
   const gain = audioCtx.createGain()
-  osc.connect(gain); gain.connect(audioCtx.destination)
+  osc.connect(gain); gain.connect(masterGain)
   osc.type = 'sine'
   osc.frequency.setValueAtTime(freq, t)
   osc.frequency.exponentialRampToValueAtTime(freq * 1.5, t + 0.08)
@@ -198,7 +224,7 @@ function playMiss () {
   const t = audioCtx.currentTime
   const osc = audioCtx.createOscillator()
   const gain = audioCtx.createGain()
-  osc.connect(gain); gain.connect(audioCtx.destination)
+  osc.connect(gain); gain.connect(masterGain)
   osc.type = 'sawtooth'
   osc.frequency.setValueAtTime(200, t)
   osc.frequency.exponentialRampToValueAtTime(80, t + 0.18)
@@ -214,7 +240,7 @@ function playMilestone () {
     const t = audioCtx.currentTime + i * 0.1
     const osc = audioCtx.createOscillator()
     const gain = audioCtx.createGain()
-    osc.connect(gain); gain.connect(audioCtx.destination)
+    osc.connect(gain); gain.connect(masterGain)
     osc.type = 'triangle'
     osc.frequency.value = freq
     gain.gain.setValueAtTime(0, t)
@@ -231,7 +257,7 @@ function playGameOverSound () {
     const t = audioCtx.currentTime + i * 0.2
     const osc = audioCtx.createOscillator()
     const gain = audioCtx.createGain()
-    osc.connect(gain); gain.connect(audioCtx.destination)
+    osc.connect(gain); gain.connect(masterGain)
     osc.type = 'sine'
     osc.frequency.value = freq
     gain.gain.setValueAtTime(0.18, t)
@@ -250,7 +276,7 @@ function playPowerUp (type = 'default') {
     notes.forEach((f, i) => {
       const osc  = audioCtx.createOscillator()
       const gain = audioCtx.createGain()
-      osc.connect(gain); gain.connect(audioCtx.destination)
+      osc.connect(gain); gain.connect(masterGain)
       osc.type = 'sine'
       osc.frequency.value = f
       gain.gain.setValueAtTime(0.09, t + i * 0.08)
@@ -263,7 +289,7 @@ function playPowerUp (type = 'default') {
     notes.forEach((f, i) => {
       const osc  = audioCtx.createOscillator()
       const gain = audioCtx.createGain()
-      osc.connect(gain); gain.connect(audioCtx.destination)
+      osc.connect(gain); gain.connect(masterGain)
       osc.type = 'square'
       osc.frequency.value = f
       gain.gain.setValueAtTime(0, t + i * 0.07)
@@ -275,7 +301,7 @@ function playPowerUp (type = 'default') {
     // Rising magnetic hum + sparkle
     const osc  = audioCtx.createOscillator()
     const gain = audioCtx.createGain()
-    osc.connect(gain); gain.connect(audioCtx.destination)
+    osc.connect(gain); gain.connect(masterGain)
     osc.type = 'sawtooth'
     osc.frequency.setValueAtTime(80, t)
     osc.frequency.exponentialRampToValueAtTime(320, t + 0.4)
@@ -284,7 +310,7 @@ function playPowerUp (type = 'default') {
     osc.start(t); osc.stop(t + 0.5)
     const osc2  = audioCtx.createOscillator()
     const gain2 = audioCtx.createGain()
-    osc2.connect(gain2); gain2.connect(audioCtx.destination)
+    osc2.connect(gain2); gain2.connect(masterGain)
     osc2.type = 'sine'
     osc2.frequency.setValueAtTime(880, t + 0.2)
     osc2.frequency.exponentialRampToValueAtTime(1200, t + 0.45)
@@ -295,7 +321,7 @@ function playPowerUp (type = 'default') {
     // Ethereal whoosh sweep
     const osc  = audioCtx.createOscillator()
     const gain = audioCtx.createGain()
-    osc.connect(gain); gain.connect(audioCtx.destination)
+    osc.connect(gain); gain.connect(masterGain)
     osc.type = 'sine'
     osc.frequency.setValueAtTime(200, t)
     osc.frequency.exponentialRampToValueAtTime(900, t + 0.15)
@@ -309,7 +335,7 @@ function playPowerUp (type = 'default') {
     ;[1047, 1319, 1568, 2093, 2637].forEach((f, i) => {
       const osc  = audioCtx.createOscillator()
       const gain = audioCtx.createGain()
-      osc.connect(gain); gain.connect(audioCtx.destination)
+      osc.connect(gain); gain.connect(masterGain)
       osc.type = 'triangle'
       osc.frequency.value = f
       gain.gain.setValueAtTime(0.1, t + i * 0.055)
@@ -320,7 +346,7 @@ function playPowerUp (type = 'default') {
     // Shield — deep resonant bell
     const osc  = audioCtx.createOscillator()
     const gain = audioCtx.createGain()
-    osc.connect(gain); gain.connect(audioCtx.destination)
+    osc.connect(gain); gain.connect(masterGain)
     osc.type = 'sine'
     osc.frequency.setValueAtTime(330, t)
     osc.frequency.exponentialRampToValueAtTime(220, t + 0.8)
@@ -336,7 +362,7 @@ function playShieldBreak () {
   // Glass-crack: high pitched descending ping + noise burst
   const osc  = audioCtx.createOscillator()
   const gain = audioCtx.createGain()
-  osc.connect(gain); gain.connect(audioCtx.destination)
+  osc.connect(gain); gain.connect(masterGain)
   osc.type = 'sine'
   osc.frequency.setValueAtTime(1400, t)
   osc.frequency.exponentialRampToValueAtTime(300, t + 0.25)
@@ -350,7 +376,7 @@ function playShieldBreak () {
   const src  = audioCtx.createBufferSource()
   const ng   = audioCtx.createGain()
   src.buffer = buf
-  src.connect(ng); ng.connect(audioCtx.destination)
+  src.connect(ng); ng.connect(masterGain)
   ng.gain.setValueAtTime(0.18, t)
   ng.gain.exponentialRampToValueAtTime(0.001, t + 0.18)
   src.start(t)
@@ -362,7 +388,7 @@ function playBombHit () {
   // Deep boom
   const osc  = audioCtx.createOscillator()
   const gain = audioCtx.createGain()
-  osc.connect(gain); gain.connect(audioCtx.destination)
+  osc.connect(gain); gain.connect(masterGain)
   osc.type = 'sawtooth'
   osc.frequency.setValueAtTime(90, t)
   osc.frequency.exponentialRampToValueAtTime(28, t + 0.45)
@@ -376,7 +402,7 @@ function playBombHit () {
   const src   = audioCtx.createBufferSource()
   const nGain = audioCtx.createGain()
   src.buffer = buf
-  src.connect(nGain); nGain.connect(audioCtx.destination)
+  src.connect(nGain); nGain.connect(masterGain)
   nGain.gain.setValueAtTime(0.18, t)
   nGain.gain.exponentialRampToValueAtTime(0.001, t + 0.28)
   src.start(t); src.stop(t + 0.28)
@@ -451,7 +477,7 @@ function musicTick () {
     CHORD_PROG[barIdx].forEach(freq => {
       const osc = audioCtx.createOscillator()
       const gain = audioCtx.createGain()
-      osc.connect(gain); gain.connect(audioCtx.destination)
+      osc.connect(gain); gain.connect(masterGain)
       osc.type = 'triangle'
       osc.frequency.value = freq
       gain.gain.setValueAtTime(0.025, t)
@@ -466,7 +492,7 @@ function musicTick () {
     const bass = CHORD_PROG[barIdx][0] / 2
     const osc = audioCtx.createOscillator()
     const gain = audioCtx.createGain()
-    osc.connect(gain); gain.connect(audioCtx.destination)
+    osc.connect(gain); gain.connect(masterGain)
     osc.type = 'triangle'
     osc.frequency.value = bass
     gain.gain.setValueAtTime(0.065, t)
@@ -479,7 +505,7 @@ function musicTick () {
   if (note) {
     const osc = audioCtx.createOscillator()
     const gain = audioCtx.createGain()
-    osc.connect(gain); gain.connect(audioCtx.destination)
+    osc.connect(gain); gain.connect(masterGain)
     osc.type = 'sine'
     osc.frequency.value = note
     gain.gain.setValueAtTime(0.07, t)
@@ -558,6 +584,7 @@ function beginPlaying () {
   cart.x              = WIDTH / 2 - CART_W / 2
   cart.w              = CART_W
   startMusic()
+  requestGyro()
 }
 
 function loop (now) {
@@ -600,9 +627,20 @@ function update () {
     if (activePowerUp.framesLeft <= 0) deactivatePowerUp()
   }
 
-  // Move cart
+  // Move cart — keyboard
   if (keys.left)  cart.x = Math.max(0, cart.x - CART_SPD * dt)
   if (keys.right) cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD * dt)
+  // Gyro override on mobile
+  if (gyroActive) {
+    const DEAD = 5
+    const tilt = gyroGamma
+    if (Math.abs(tilt) > DEAD) {
+      const frac = (Math.abs(tilt) - DEAD) / (90 - DEAD)
+      const spd  = frac * CART_SPD * 2.2
+      if (tilt < 0) cart.x = Math.max(0, cart.x - spd * dt)
+      else          cart.x = Math.min(WIDTH - cart.w, cart.x + spd * dt)
+    }
+  }
 
   // Shake & flash decay
   if (shakeFrames > 0)        shakeFrames        -= dt
@@ -1707,7 +1745,7 @@ function drawHUD () {
   ctx.fillStyle    = 'rgba(255,255,255,0.25)'
   ctx.textAlign    = 'center'
   ctx.textBaseline = 'bottom'
-  ctx.fillText(isTouchDevice.value ? 'Use buttons or drag to move' : '← →  or  A / D  to move', WIDTH / 2, HEIGHT - 10)
+  ctx.fillText(gyroActive ? 'Tilt to steer' : '← →  or  A / D  to move', WIDTH / 2, HEIGHT - 10)
   ctx.restore()
 }
 
@@ -1761,8 +1799,9 @@ onUnmounted(() => {
   canvasRef.value?.removeEventListener('touchcancel', onTouchEnd)
   window.removeEventListener('keydown',           onKeyDown)
   window.removeEventListener('keyup',             onKeyUp)
-  window.removeEventListener('resize',            checkOrientation)
-  window.removeEventListener('orientationchange', checkOrientation)
+  window.removeEventListener('resize',             checkOrientation)
+  window.removeEventListener('orientationchange',  checkOrientation)
+  window.removeEventListener('deviceorientation',  onDeviceOrientation)
 })
 </script>
 
@@ -1787,11 +1826,18 @@ onUnmounted(() => {
   height: 100vh;
 }
 
+/* Canvas frame — sizes to the canvas so children can be positioned relative to it */
+.canvas-frame {
+  position: relative;
+  display: inline-block;
+  line-height: 0; /* collapse whitespace gap below canvas */
+  width: min(1280px, 100vw, calc((100vh - 80px) * 1.7778));
+}
+
 /* Canvas scales down proportionally to fit both viewport width & height */
 .game-canvas {
   display: block;
-  /* Never wider than viewport, never taller than (viewport - 80px nav) at 16:9 */
-  width: min(1280px, 100vw, calc((100vh - 80px) * 1.7778));
+  width: 100%;
   height: auto;
   aspect-ratio: 16 / 9;
   image-rendering: pixelated;
@@ -1847,6 +1893,52 @@ onUnmounted(() => {
 @keyframes rotate-hint {
   from { transform: rotate(-5deg); }
   to   { transform: rotate(85deg); }
+}
+
+/* Mute button */
+.mute-btn {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 30;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(26, 14, 6, 0.72);
+  border: 1px solid rgba(169, 124, 58, 0.4);
+  border-radius: 50%;
+  color: rgba(242, 232, 213, 0.85);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background 0.2s, border-color 0.2s;
+  padding: 0;
+}
+.mute-btn:hover {
+  background: rgba(42, 26, 12, 0.9);
+  border-color: rgba(169, 124, 58, 0.7);
+}
+.mute-btn svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
+/* Mobile landscape — fill the full screen */
+@media (max-width: 900px) and (orientation: landscape) {
+  .game-wrapper {
+    padding: 0;
+    margin-top: 0;
+  }
+  .canvas-frame {
+    width: min(100vw, calc(100dvh * 1.7778));
+  }
+  .game-canvas {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
 }
 
 /* ── Touch D-pad buttons ──────────────────────────────────────────────────── */

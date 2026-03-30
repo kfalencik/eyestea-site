@@ -53,9 +53,20 @@
 
 <script setup>
 const emit = defineEmits(['enter'])
-const visible = ref(true)
+
+const ageVerified = useCookie('age-verified', {
+  maxAge: 60 * 60 * 24 * 365, // 1 year
+  sameSite: 'strict',
+})
+
+const visible = ref(!ageVerified.value)
+
+if (ageVerified.value) {
+  emit('enter')
+}
 
 function enter() {
+  ageVerified.value = 'true'
   visible.value = false
   emit('enter')
 }
