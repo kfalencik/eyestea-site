@@ -164,6 +164,23 @@ function spawnHazard (delay = 0) {
   })
 }
 
+function spawnTargetedHazard () {
+  // Spawn aimed at the cart centre so the player can't idle in one spot
+  const targetX = Math.max(25, Math.min(WIDTH - 74, cart.x + cart.w / 2 - 25))
+  hazards.push({
+    x:        targetX,
+    y:        -70,
+    vy:       4.2 + Math.random() * 1.0,
+    w:        50,
+    h:        60,
+    frame:    0,
+    hit:      false,
+    hitTimer: 0,
+    delay:    0,
+    targeted: true,
+  })
+}
+
 // Score & catch log
 let score = 0
 let missed = 0
@@ -180,7 +197,7 @@ let powerUpsUsed = 0
 let combo               = 0
 let comboTimer          = 0       // frames until streak expires
 let powerUpProgress     = 0       // catches within current 10-catch power-up cycle
-const COMBO_WINDOW      = 360     // 6 s at 60 fps to catch the next can
+const COMBO_WINDOW      = 120     // 2 s at 60 fps to catch the next can
 let shakeFrames         = 0
 let difficultyTimer     = 0
 let activeSpawnInterval = SPAWN_INTERVAL
@@ -200,6 +217,8 @@ let powerUpBanner      = null   // { pu, framesLeft, maxFrames }
 const HAZARD_START  = 0     // bombs start immediately
 const HAZARD_BASE   = 420   // ~7 s between bomb waves initially
 const HAZARD_MIN    = 120   // floor — never faster than ~2 s
+const TARGET_BOMB_INTERVAL = 300  // every 5 s (60 fps × 5)
+let targetBombTimer = 0
 
 // ── Power-ups ─────────────────────────────────────────────────────────────────
 const POWERUPS = [
@@ -643,6 +662,7 @@ function beginPlaying () {
   floatTexts.length   = 0
   hazards.length      = 0
   hazardTimer         = 0
+  targetBombTimer     = 0
   scoreRainTimer      = 0
   bombFlashFrames     = 0
   powerUpBanner       = null
@@ -762,6 +782,7 @@ function update () {
 
   // ── Hazard (bomb) spawn + update ────────────────────────────────────────────
   hazardTimer += dt
+  targetBombTimer += dt
   // Every 15 s (900 frames) interval shrinks by 30 frames, floored at HAZARD_MIN
   const diffTier       = Math.floor(difficultyTimer / 900)
   const hazardInterval = Math.max(HAZARD_MIN, HAZARD_BASE - diffTier * 30)
@@ -770,6 +791,11 @@ function update () {
   if (difficultyTimer >= HAZARD_START && hazardTimer >= hazardInterval) {
     for (let _h = 0; _h < hazardCount; _h++) spawnHazard(_h * 45)
     hazardTimer = 0
+  }
+  // Targeted bomb every 5 s
+  if (difficultyTimer >= HAZARD_START && targetBombTimer >= TARGET_BOMB_INTERVAL) {
+    spawnTargetedHazard()
+    targetBombTimer = 0
   }
 
   for (let i = hazards.length - 1; i >= 0; i--) {
@@ -873,6 +899,7 @@ function update () {
       cartBounceTimer = CART_BOUNCE_FRAMES
       totalCaught++
       if (c.golden) goldenCaught++
+      combo++
       if (combo > bestCombo) bestCombo = combo
       powerUpProgress++
       comboTimer = COMBO_WINDOW   // reset window on each catch
@@ -1856,6 +1883,30 @@ function drawHUD () {
     ctx.restore()
   }
 
+  // Elapsed time + level — small row below the score number
+  {
+    const elapsed = Math.floor(difficultyTimer / 60)
+    const mm = Math.floor(elapsed / 60)
+    const ss = elapsed % 60
+    const timeStr = `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+    ctx.save()
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'top'
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(169,124,58,0.7)'
+    ctx.fillText('TIME', LX, 68)
+    ctx.font         = 'bold 11px monospace'
+    ctx.fillStyle    = 'rgba(242,232,213,0.85)'
+    ctx.fillText(timeStr, LX + 34, 68)
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(169,124,58,0.7)'
+    ctx.fillText('LVL', LX + 98, 68)
+    ctx.font         = 'bold 11px monospace'
+    ctx.fillStyle    = 'rgba(242,232,213,0.85)'
+    ctx.fillText(String(level), LX + 122, 68)
+    ctx.restore()
+  }
+
   // Active power-up pill moved to draw() — rendered below the HUD bar over the game
 
   // ── CENTRE: LIVES ────────────────────────────────────────────────
@@ -1985,9 +2036,14 @@ function drawHUD () {
     ctx.restore()
   }
 
-  // Combo number + ×N badge — to the LEFT of the pip block
-  if (combo > 0) {
-    const sColor = streakMult >= 4 ? '#ff6b35' : streakMult >= 3 ? '#ff9b35' : streakMult >= 2 ? '#fbbf24' : 'rgba(242,232,213,0.9)'
+  // Combo number + ×N badge — to the LEFT of the pip block (always visible)
+  {
+    const sColor = combo === 0
+      ? 'rgba(255,255,255,0.15)'
+      : streakMult >= 4 ? '#ff6b35'
+      : streakMult >= 3 ? '#ff9b35'
+      : streakMult >= 2 ? '#fbbf24'
+      : 'rgba(242,232,213,0.9)'
     const numX   = pipsX - 14
 
     ctx.save()
@@ -1995,22 +2051,20 @@ function drawHUD () {
     ctx.textBaseline = 'middle'
     ctx.font         = 'bold 42px monospace'
     ctx.fillStyle    = sColor
-    ctx.shadowColor  = sColor
-    ctx.shadowBlur   = 14
+    if (combo > 0) { ctx.shadowColor = sColor; ctx.shadowBlur = 14 }
     ctx.fillText(String(combo), numX, 43)
     ctx.restore()
 
-    if (streakMult > 1) {
-      ctx.save()
-      ctx.textAlign    = 'right'
-      ctx.textBaseline = 'top'
-      ctx.font         = 'bold 11px monospace'
-      ctx.fillStyle    = sColor
-      ctx.shadowColor  = sColor
-      ctx.shadowBlur   = 6
-      ctx.fillText(`×${streakMult}`, numX, 9)
-      ctx.restore()
-    }
+    // ×N multiplier badge — always shown, dimmed at ×1
+    const multColor = streakMult > 1 ? sColor : 'rgba(255,255,255,0.2)'
+    ctx.save()
+    ctx.textAlign    = 'right'
+    ctx.textBaseline = 'top'
+    ctx.font         = 'bold 11px monospace'
+    ctx.fillStyle    = multColor
+    if (streakMult > 1) { ctx.shadowColor = multColor; ctx.shadowBlur = 6 }
+    ctx.fillText(`×${streakMult}`, numX, 9)
+    ctx.restore()
   }
 
   // Controls hint
