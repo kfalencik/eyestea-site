@@ -37,7 +37,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 const isPortrait    = ref(false)
 const isTouchDevice = ref(false)
@@ -87,6 +87,13 @@ let dragLastX    = 0   // canvas-space X of last touchmove
 // Side-press steering (tap left/right half of screen)
 let touchLeft    = false
 let touchRight   = false
+
+// Cart bounce on catch
+let cartBounceTimer = 0
+const CART_BOUNCE_FRAMES = 8  // duration of one bounce
+
+// Cart facing direction: 1 = right (default), -1 = left
+let cartDir = 1
 
 function onDeviceOrientation (e) {
   gyroGamma = e.gamma ?? 0
@@ -178,7 +185,7 @@ let shakeFrames         = 0
 let difficultyTimer     = 0
 let activeSpawnInterval = SPAWN_INTERVAL
 let nextMilestoneIdx    = 0
-const MILESTONES        = [5, 10, 20]
+const MILESTONES        = [1000, 2000, 10000]
 const particles         = []
 const floatTexts        = []
 
@@ -213,7 +220,11 @@ let powerUpNextCombo   = 10
 // ── Audio (Web Audio API) ─────────────────────────────────────────────────────
 let audioCtx   = null
 let masterGain = null
-const isMuted  = ref(false)
+const muteCookie = useCookie('game-muted', { maxAge: 31536000, sameSite: 'strict', default: () => false })
+const isMuted    = computed({
+  get: () => !!muteCookie.value,
+  set: (v) => { muteCookie.value = v },
+})
 
 function ensureAudio () {
   if (!audioCtx) {
@@ -692,8 +703,8 @@ function update () {
   }
 
   // Move cart — keyboard
-  if (keys.left  || touchLeft)  cart.x = Math.max(0, cart.x - CART_SPD * dt)
-  if (keys.right || touchRight) cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD * dt)
+  if (keys.left  || touchLeft)  { cart.x = Math.max(0, cart.x - CART_SPD * dt); cartDir = -1 }
+  if (keys.right || touchRight) { cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD * dt); cartDir = 1 }
   // Gyro override on mobile — only when not dragging or side-pressing
   if (gyroActive && !dragActive && !touchLeft && !touchRight) {
     const DEAD = 5
@@ -701,12 +712,13 @@ function update () {
     if (Math.abs(tilt) > DEAD) {
       const frac = (Math.abs(tilt) - DEAD) / (90 - DEAD)
       const spd  = frac * CART_SPD * 2.2
-      if (tilt < 0) cart.x = Math.max(0, cart.x - spd * dt)
-      else          cart.x = Math.min(WIDTH - cart.w, cart.x + spd * dt)
+      if (tilt < 0) { cart.x = Math.max(0, cart.x - spd * dt); cartDir = -1 }
+      else          { cart.x = Math.min(WIDTH - cart.w, cart.x + spd * dt); cartDir = 1 }
     }
   }
 
   // Shake & flash decay
+  if (cartBounceTimer > 0) cartBounceTimer -= dt
   if (shakeFrames > 0)        shakeFrames        -= dt
   if (bombFlashFrames > 0)    bombFlashFrames    -= dt
   if (powerUpFlashFrames > 0) powerUpFlashFrames -= dt
@@ -858,7 +870,7 @@ function update () {
       canCX <= catchRight
     ) {
       c.caught = true
-      combo++
+      cartBounceTimer = CART_BOUNCE_FRAMES
       totalCaught++
       if (c.golden) goldenCaught++
       if (combo > bestCombo) bestCombo = combo
@@ -1277,9 +1289,9 @@ function drawGameOverScreen () {
 
   // ── Reward rows ───────────────────────────────────────────────────────────
   const milestones = [
-    { threshold: 5,  emoji: '🛒', reward: '5% off your next order' },
-    { threshold: 10, emoji: '⭐', reward: 'Free can in your basket' },
-    { threshold: 20, emoji: '🎁', reward: 'Unlock a secret flavour' },
+    { threshold: 1000,  emoji: '🛒', reward: '5% off your next order' },
+    { threshold: 2000,  emoji: '⭐', reward: '10% off your next order' },
+    { threshold: 10000, emoji: '🎁', reward: '25% off your next order' },
   ]
   const rewardY  = gridY + 2 * (cellH + cellGap) + 14
   const rewardW  = gridW
@@ -1520,7 +1532,18 @@ function draw () {
   }
 
   // Cart
-  ctx.drawImage(imgs.cart, cart.x, cart.y, cart.w, cart.h)
+  const cartBounceY = cartBounceTimer > 0
+    ? Math.sin((1 - cartBounceTimer / CART_BOUNCE_FRAMES) * Math.PI) * 7
+    : 0
+  ctx.save()
+  if (cartDir === 1) {
+    ctx.translate(cart.x + cart.w / 2, 0)
+    ctx.scale(-1, 1)
+    ctx.drawImage(imgs.cart, -cart.w / 2, cart.y + cartBounceY, cart.w, cart.h)
+  } else {
+    ctx.drawImage(imgs.cart, cart.x, cart.y + cartBounceY, cart.w, cart.h)
+  }
+  ctx.restore()
 
   // Floating score texts
   for (const f of floatTexts) {
