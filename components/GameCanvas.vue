@@ -11,20 +11,14 @@
       </div>
     </Transition>
     <div class="canvas-frame">
-      <canvas ref="canvasRef" :width="canvasWidth" :height="canvasHeight" class="game-canvas" />
-
-      <!-- Play button overlay (start screen only, touch devices) -->
-      <Transition name="play-fade">
-        <button
-          v-if="isTouchDevice && !isPlaying"
-          class="play-btn"
-          @click="onPlayBtnClick"
-        >
-          <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          Play
-        </button>
-      </Transition>
-
+      <canvas ref="canvasRef" :width="WIDTH" :height="HEIGHT" class="game-canvas" />
+      <!-- Restart button -->
+      <button class="restart-btn" @click="goToStart" aria-label="Restart">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="1 4 1 10 7 10"/>
+          <path d="M3.51 15a9 9 0 1 0 .49-4.95"/>
+        </svg>
+      </button>
       <!-- Mute button -->
       <button class="mute-btn" @click="toggleMute" :aria-label="isMuted ? 'Unmute' : 'Mute'">
         <svg v-if="!isMuted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -38,18 +32,6 @@
           <line x1="17" y1="9" x2="23" y2="15"/>
         </svg>
       </button>
-
-      <!-- Exit button (touch devices, while playing) -->
-      <Transition name="play-fade">
-        <button
-          v-if="isTouchDevice && isPlaying"
-          class="exit-btn"
-          @click="exitGame"
-          aria-label="Exit game"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      </Transition>
     </div>
   </div>
 </template>
@@ -59,35 +41,6 @@ import { ref, onMounted, onUnmounted } from 'vue'
 
 const isPortrait    = ref(false)
 const isTouchDevice = ref(false)
-const isPlaying     = ref(false)
-
-function enterGame () {
-  isPlaying.value = true
-  // Scroll canvas into view
-  canvasRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  // Lock body scroll and hide cursor while in-game
-  document.body.style.overflow = 'hidden'
-  document.documentElement.style.overflow = 'hidden'
-  document.body.style.cursor = 'none'
-}
-
-function exitGame () {
-  // Return to start screen
-  if (gameState !== 'start') {
-    gameState = 'start'
-    stopMusic()
-    if (activePowerUp) deactivatePowerUp()
-    cans.length = 0
-    hazards.length = 0
-    particles.length = 0
-    floatTexts.length = 0
-  }
-  isPlaying.value = false
-  // Restore scroll and cursor
-  document.body.style.overflow = ''
-  document.documentElement.style.overflow = ''
-  document.body.style.cursor = ''
-}
 
 function checkOrientation () {
   const w = window.innerWidth
@@ -96,35 +49,8 @@ function checkOrientation () {
 }
 
 // ── Canvas dimensions ─────────────────────────────────────────────────────────
-const WIDTH  = 2220
-const HEIGHT = 1280
-
-// ── Dynamic display size + draw transform ────────────────────────────────────
-const canvasWidth  = ref(WIDTH)
-const canvasHeight = ref(HEIGHT)
-let drawScale   = 1
-let drawOffsetX = 0
-let drawOffsetY = 0
-
-function computeDimensions () {
-  const mobile = isTouchDevice.value
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  const navH = mobile ? 0 : 80
-  const MAX_W = 1400
-
-  // Scale game world to fit within available space, respecting max width
-  const availW = Math.min(vw, MAX_W)
-  const availH = vh - navH
-  const s = Math.min(availW / WIDTH, availH / HEIGHT)
-  drawScale   = s
-  drawOffsetX = 0
-  drawOffsetY = 0
-
-  // Canvas is exactly the size of the scaled game — no letterbox bars
-  canvasWidth.value  = Math.round(WIDTH  * s)
-  canvasHeight.value = Math.round(HEIGHT * s)
-}
+const WIDTH  = 1280
+const HEIGHT = 720
 
 // ── Sprite sizes ──────────────────────────────────────────────────────────────
 const CART_W   = 200
@@ -149,9 +75,31 @@ let gameState = 'start'
 
 const keys = { left: false, right: false }
 
-// Drag-to-move state (touch / pointer)
-let dragActive  = false
-let dragLastX   = 0  // in canvas CSS pixels
+// Gyroscope state
+let gyroActive = false
+let gyroGamma  = 0
+
+function onDeviceOrientation (e) {
+  gyroGamma = e.gamma ?? 0
+}
+
+async function requestGyro () {
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS 13+ requires explicit permission via a user gesture
+    try {
+      const perm = await DeviceOrientationEvent.requestPermission()
+      if (perm === 'granted') {
+        window.addEventListener('deviceorientation', onDeviceOrientation)
+        gyroActive = true
+      }
+    } catch (_) { /* permission denied or unavailable */ }
+  } else if (typeof DeviceOrientationEvent !== 'undefined') {
+    // Android / desktop — no permission required
+    window.addEventListener('deviceorientation', onDeviceOrientation)
+    gyroActive = true
+  }
+}
 
 // Cart lives at bottom of canvas
 const cart = {
@@ -206,6 +154,7 @@ const caughtLog = []   // recent catch types for HUD icons
 // Combo, difficulty & effects
 let combo               = 0
 let comboTimer          = 0       // frames until streak expires
+let powerUpProgress     = 0       // catches within current 10-catch power-up cycle
 const COMBO_WINDOW      = 360     // 6 s at 60 fps to catch the next can
 let shakeFrames         = 0
 let difficultyTimer     = 0
@@ -260,6 +209,16 @@ function ensureAudio () {
 function toggleMute () {
   isMuted.value = !isMuted.value
   if (masterGain) masterGain.gain.value = isMuted.value ? 0 : 1
+}
+
+function goToStart () {
+  stopMusic()
+  if (activePowerUp) deactivatePowerUp()
+  cans.length      = 0
+  hazards.length   = 0
+  particles.length = 0
+  floatTexts.length = 0
+  gameState = 'start'
 }
 
 function playCatch (comboVal = 1) {
@@ -618,7 +577,8 @@ function beginPlaying () {
   score               = 0
   missed              = 0
   combo               = 0
-  shakeFrames         = 0
+  comboTimer          = 0
+  powerUpProgress     = 0
   difficultyTimer     = 0
   activeSpawnInterval = SPAWN_INTERVAL
   nextMilestoneIdx    = 0
@@ -643,6 +603,7 @@ function beginPlaying () {
   cart.x              = WIDTH / 2 - CART_W / 2
   cart.w              = CART_W
   startMusic()
+  requestGyro()
 }
 
 function loop (now) {
@@ -650,9 +611,6 @@ function loop (now) {
   const raw = lastTime === 0 ? 16.67 : Math.min(now - lastTime, 50)
   lastTime  = now
   dt = raw / 16.6667  // 1.0 = exactly 60fps; 2.0 = 30fps, etc.
-
-  // Map game-world coords (2220×1280) into the display canvas
-  ctx.setTransform(drawScale, 0, 0, drawScale, drawOffsetX, drawOffsetY)
 
   if (gameState === 'start') {
     drawStartScreen()
@@ -662,8 +620,6 @@ function loop (now) {
     update()
     draw()
   }
-
-  ctx.setTransform(1, 0, 0, 1, 0, 0)
   rafId = requestAnimationFrame(loop)
 }
 
@@ -693,6 +649,17 @@ function update () {
   // Move cart — keyboard
   if (keys.left)  cart.x = Math.max(0, cart.x - CART_SPD * dt)
   if (keys.right) cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD * dt)
+  // Gyro override on mobile
+  if (gyroActive) {
+    const DEAD = 5
+    const tilt = gyroGamma
+    if (Math.abs(tilt) > DEAD) {
+      const frac = (Math.abs(tilt) - DEAD) / (90 - DEAD)
+      const spd  = frac * CART_SPD * 2.2
+      if (tilt < 0) cart.x = Math.max(0, cart.x - spd * dt)
+      else          cart.x = Math.min(WIDTH - cart.w, cart.x + spd * dt)
+    }
+  }
 
   // Shake & flash decay
   if (shakeFrames > 0)        shakeFrames        -= dt
@@ -704,8 +671,9 @@ function update () {
   if (combo > 0) {
     comboTimer -= globalSpeedMult * dt
     if (comboTimer <= 0) {
-      combo      = 0
-      comboTimer = 0
+      combo           = 0
+      comboTimer      = 0
+      powerUpProgress = 0
       floatTexts.push({ text: 'STREAK LOST', x: WIDTH - 120, y: 100, life: 55, maxLife: 55, color: 'rgba(255,255,255,0.55)', size: 13 })
     }
   }
@@ -770,6 +738,7 @@ function update () {
       } else {
         combo           = 0
         comboTimer      = 0
+        powerUpProgress = 0
         shakeFrames     = 22
         bombFlashFrames = 38
         if (activePowerUp) deactivatePowerUp()
@@ -835,18 +804,18 @@ function update () {
     ) {
       c.caught = true
       combo++
+      powerUpProgress++
       comboTimer = COMBO_WINDOW   // reset window on each catch
-      streakMult  = combo <= 3 ? 1 : combo <= 6 ? 2 : 3
+      streakMult  = Math.floor(combo / 10) + 1
       score += scoreMultiplier * streakMult
       caughtLog.push(c.type)
       if (caughtLog.length > MAX_CAUGHT_LOG) caughtLog.shift()
 
-      playCatch(combo)
+      playCatch(powerUpProgress)
 
       // Power-up trigger every 10 consecutive catches
-      if (combo >= 10) {
-        combo = 0
-        comboTimer = 0
+      if (powerUpProgress >= 10) {
+        powerUpProgress = 0
         activatePowerUp(POWERUPS[Math.floor(Math.random() * POWERUPS.length)])
       }
 
@@ -874,12 +843,12 @@ function update () {
 
       // Float text
       const pts   = scoreMultiplier * streakMult
-      const label = combo >= 3 ? `${combo}× COMBO! +${pts}` : `+${pts}`
+      const label = combo >= 2 ? `${combo}× STREAK! +${pts}` : `+${pts}`
       floatTexts.push({
         text: label, x: c.x + c.w / 2, y: c.y,
         life: 48, maxLife: 48,
-        color:  combo >= 3 ? '#fbbf24' : '#ffffff',
-        size:   combo >= 3 ? 22 : 16,
+        color:  combo >= 2 ? '#fbbf24' : '#ffffff',
+        size:   combo >= 2 ? 22 : 16,
       })
     } else if (c.y > HEIGHT) {
       c.missed    = true
@@ -1730,41 +1699,39 @@ function drawHUD () {
     ctx.restore()
   }
 
-  // ── RIGHT: STREAK 1–10 ──────────────────────────────────────────
+  // ── RIGHT: STREAK ─────────────────────────────────────────────
   const RX = WIDTH - 28
 
-  // Label + streak multiplier badge
+  // Fixed layout (all right-aligned to RX):
+  //   y=9       "STREAK" label
+  //   y=22–34   pip dots (r=6), right-aligned
+  //   y=38      decay bar under pips
+  //   combo number + ×N badge sit to the LEFT of the pip block
+
+  const PIP_R   = 6
+  const PIP_GAP = 4
+  const pipsW   = 10 * (PIP_R * 2 + PIP_GAP) - PIP_GAP  // 136px
+  const pipsX   = RX - pipsW
+  const pipsY   = 22
+
+  // "STREAK" label
   ctx.save()
   ctx.textAlign    = 'right'
   ctx.textBaseline = 'top'
   ctx.font         = 'bold 10px monospace'
   ctx.fillStyle    = 'rgba(169,124,58,0.85)'
-  ctx.fillText('STREAK', RX, 11)
-  if (streakMult > 1) {
-    const mColor = streakMult >= 3 ? '#ff6b35' : '#fbbf24'
-    ctx.font      = 'bold 12px monospace'
-    ctx.fillStyle = mColor
-    ctx.shadowColor = mColor
-    ctx.shadowBlur  = 8
-    ctx.textAlign   = 'left'
-    ctx.fillText(`×${streakMult}`, RX - 190, 9)
-  }
+  ctx.fillText('STREAK', RX, 9)
   ctx.restore()
 
-  // 10 pip dots
-  const PIP_R   = 7
-  const PIP_GAP = 5
-  const pipsW   = 10 * (PIP_R * 2 + PIP_GAP) - PIP_GAP
-  const pipsX   = RX - pipsW
-  const pipsY   = 26
+  // Pip dots — power-up progress
   for (let i = 0; i < 10; i++) {
-    const filled = i < combo
+    const filled = i < powerUpProgress
     const pipX   = pipsX + i * (PIP_R * 2 + PIP_GAP) + PIP_R
     ctx.save()
     if (filled) {
       ctx.shadowColor = '#fbbf24'
       ctx.shadowBlur  = 10
-      ctx.fillStyle   = combo >= 9 ? '#ff4444' : '#fbbf24'
+      ctx.fillStyle   = powerUpProgress >= 9 ? '#ff4444' : '#fbbf24'
     } else {
       ctx.fillStyle   = 'rgba(255,255,255,0.12)'
     }
@@ -1774,21 +1741,47 @@ function drawHUD () {
     ctx.restore()
   }
 
-  // Streak decay timer bar
+  // Decay bar — directly under pip row
   if (combo > 0) {
-    const barW     = pipsW
-    const barX2    = RX - barW
     const timeLeft = comboTimer / COMBO_WINDOW
     const tColor   = timeLeft < 0.3 ? '#ef4444' : timeLeft < 0.6 ? '#f97316' : '#a97c3a'
     ctx.save()
     ctx.fillStyle = 'rgba(255,255,255,0.09)'
-    roundRect(barX2, 50, barW, 5, 3)
+    roundRect(pipsX, 38, pipsW, 4, 2)
     ctx.fill()
     ctx.fillStyle = tColor
     if (timeLeft < 0.3) { ctx.shadowColor = '#ef4444'; ctx.shadowBlur = 8 }
-    roundRect(barX2, 50, Math.max(barW * timeLeft, 3), 5, 3)
+    roundRect(pipsX, 38, Math.max(pipsW * timeLeft, 3), 4, 2)
     ctx.fill()
     ctx.restore()
+  }
+
+  // Combo number + ×N badge — to the LEFT of the pip block
+  if (combo > 0) {
+    const sColor = streakMult >= 4 ? '#ff6b35' : streakMult >= 3 ? '#ff9b35' : streakMult >= 2 ? '#fbbf24' : 'rgba(242,232,213,0.9)'
+    const numX   = pipsX - 14
+
+    ctx.save()
+    ctx.textAlign    = 'right'
+    ctx.textBaseline = 'middle'
+    ctx.font         = 'bold 42px monospace'
+    ctx.fillStyle    = sColor
+    ctx.shadowColor  = sColor
+    ctx.shadowBlur   = 14
+    ctx.fillText(String(combo), numX, 43)
+    ctx.restore()
+
+    if (streakMult > 1) {
+      ctx.save()
+      ctx.textAlign    = 'right'
+      ctx.textBaseline = 'top'
+      ctx.font         = 'bold 11px monospace'
+      ctx.fillStyle    = sColor
+      ctx.shadowColor  = sColor
+      ctx.shadowBlur   = 6
+      ctx.fillText(`×${streakMult}`, numX, 9)
+      ctx.restore()
+    }
   }
 
   // Controls hint
@@ -1797,45 +1790,32 @@ function drawHUD () {
   ctx.fillStyle    = 'rgba(255,255,255,0.25)'
   ctx.textAlign    = 'center'
   ctx.textBaseline = 'bottom'
-  ctx.fillText('Drag to steer  •  ← → / A D  on keyboard', WIDTH / 2, HEIGHT - 10)
+  ctx.fillText(gyroActive ? 'Tilt to steer' : '← →  or  A / D  to move', WIDTH / 2, HEIGHT - 10)
   ctx.restore()
 }
 
-// Play button (touch start screen)
-function onPlayBtnClick () {
-  enterGame()
-  beginPlaying()
+// Returns true if the event coords land inside the CTA button (accounting for canvas scaling)
+function isOnCtaButton (e) {
+  const canvas = canvasRef.value
+  const rect   = canvas.getBoundingClientRect()
+  const scaleX = WIDTH  / rect.width
+  const scaleY = HEIGHT / rect.height
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY
+  const cx = (clientX - rect.left) * scaleX
+  const cy = (clientY - rect.top)  * scaleY
+  const btnW = 320, btnH = 54
+  const btnX = WIDTH / 2 - btnW / 2
+  const btnY = HEIGHT - 72
+  return cx >= btnX && cx <= btnX + btnW && cy >= btnY && cy <= btnY + btnH
 }
 
-// ── Touch / pointer drag — move cart by dragging finger across screen ────────────
-function onPointerDown (e) {
-  if (e.pointerType === 'mouse') return  // mouse handled by click
-  e.preventDefault()
-  // On touch, only start drag if already playing
-  if (gameState !== 'playing') return
-  dragActive = true
-  dragLastX  = e.clientX
-  canvasRef.value.setPointerCapture(e.pointerId)
-}
-
-function onPointerMove (e) {
-  if (!dragActive || gameState !== 'playing') return
-  e.preventDefault()
-  const dx = e.clientX - dragLastX
-  dragLastX = e.clientX
-  // Convert CSS-pixel delta to game-world units
-  const gameDx = dx / drawScale
-  cart.x = Math.max(0, Math.min(WIDTH - cart.w, cart.x + gameDx))
-}
-
-function onPointerUp (e) {
-  if (e.pointerType === 'mouse') return
-  dragActive = false
-}
-
-// ── Touch input — block native scroll/zoom ─────────────────────────────────
+// ── Touch input — tap to start/restart only; movement via buttons ───────────
 function onTouchStart (e) {
   e.preventDefault()
+  if (gameState === 'start' || gameState === 'gameover') {
+    if (isOnCtaButton(e)) beginPlaying()
+  }
 }
 
 function onTouchEnd (e) {
@@ -1853,54 +1833,40 @@ function onKeyUp (e) {
   if (e.key === 'ArrowLeft'  || e.key === 'a') keys.left  = false
   if (e.key === 'ArrowRight' || e.key === 'd') keys.right = false
 }
-function onClick () {
-  // Desktop only — on touch, the Play button handles start
-  if (isTouchDevice.value) return
-  if (gameState === 'start' || gameState === 'gameover') beginPlaying()
+function onClick (e) {
+  if (gameState === 'start' || gameState === 'gameover') {
+    if (isOnCtaButton(e)) beginPlaying()
+  }
 }
 
 onMounted(() => {
   ctx = canvasRef.value.getContext('2d')
   isTouchDevice.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
-  computeDimensions()
-  canvasRef.value.addEventListener('click',        onClick)
-  canvasRef.value.addEventListener('touchstart',   onTouchStart,  { passive: false })
-  canvasRef.value.addEventListener('touchend',     onTouchEnd,    { passive: false })
-  canvasRef.value.addEventListener('touchcancel',  onTouchEnd,    { passive: false })
-  canvasRef.value.addEventListener('pointerdown',  onPointerDown, { passive: false })
-  canvasRef.value.addEventListener('pointermove',  onPointerMove, { passive: false })
-  canvasRef.value.addEventListener('pointerup',    onPointerUp)
-  canvasRef.value.addEventListener('pointercancel',onPointerUp)
-  window.addEventListener('keydown',           onKeyDown)
-  window.addEventListener('keyup',             onKeyUp)
-  window.addEventListener('resize',            onResize)
-  window.addEventListener('orientationchange', onResize)
+  canvasRef.value.addEventListener('click',       onClick)
+  canvasRef.value.addEventListener('touchstart',  onTouchStart,  { passive: false })
+  canvasRef.value.addEventListener('touchend',    onTouchEnd,    { passive: false })
+  canvasRef.value.addEventListener('touchcancel', onTouchEnd,    { passive: false })
+  window.addEventListener('keydown',          onKeyDown)
+  window.addEventListener('keyup',            onKeyUp)
+  window.addEventListener('resize',           checkOrientation)
+  window.addEventListener('orientationchange',checkOrientation)
   checkOrientation()
   loadImages()
 })
 
-function onResize () {
-  checkOrientation()
-  computeDimensions()
-}
-
 onUnmounted(() => {
-  exitGame()  // ensure scroll/cursor restored if component unmounts mid-game
   if (rafId) cancelAnimationFrame(rafId)
   stopMusic()
   if (audioCtx) { audioCtx.close(); audioCtx = null }
-  canvasRef.value?.removeEventListener('click',        onClick)
-  canvasRef.value?.removeEventListener('touchstart',   onTouchStart)
-  canvasRef.value?.removeEventListener('touchend',     onTouchEnd)
-  canvasRef.value?.removeEventListener('touchcancel',  onTouchEnd)
-  canvasRef.value?.removeEventListener('pointerdown',  onPointerDown)
-  canvasRef.value?.removeEventListener('pointermove',  onPointerMove)
-  canvasRef.value?.removeEventListener('pointerup',    onPointerUp)
-  canvasRef.value?.removeEventListener('pointercancel',onPointerUp)
-  window.removeEventListener('keydown',            onKeyDown)
-  window.removeEventListener('keyup',              onKeyUp)
-  window.removeEventListener('resize',             onResize)
-  window.removeEventListener('orientationchange',  onResize)
+  canvasRef.value?.removeEventListener('click',       onClick)
+  canvasRef.value?.removeEventListener('touchstart',  onTouchStart)
+  canvasRef.value?.removeEventListener('touchend',    onTouchEnd)
+  canvasRef.value?.removeEventListener('touchcancel', onTouchEnd)
+  window.removeEventListener('keydown',           onKeyDown)
+  window.removeEventListener('keyup',             onKeyUp)
+  window.removeEventListener('resize',             checkOrientation)
+  window.removeEventListener('orientationchange',  checkOrientation)
+  window.removeEventListener('deviceorientation',  onDeviceOrientation)
 })
 </script>
 
@@ -1908,39 +1874,42 @@ onUnmounted(() => {
 .game-wrapper {
   position: relative;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
   width: 100%;
-  /* On desktop, push below the fixed navbar */
-  margin-top: 80px;
+  padding: 24px 0;
+  margin-top: 50px;
 }
 
-/* Canvas frame — no fixed dimensions; canvas element determines its own size */
+/* In fullscreen mode, fill the screen and centre the canvas */
+.game-wrapper:fullscreen,
+.game-wrapper:-webkit-full-screen {
+  background: #1a0e06;
+  padding: 0;
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Canvas frame — sizes to the canvas so children can be positioned relative to it */
 .canvas-frame {
   position: relative;
   display: inline-block;
-  line-height: 0;
+  line-height: 0; /* collapse whitespace gap below canvas */
+  width: min(1280px, 100vw, calc((100vh - 80px) * 1.7778));
 }
 
-/* Canvas display — 1:1 with its buffer; JS sets width/height attributes */
+/* Canvas scales down proportionally to fit both viewport width & height */
 .game-canvas {
   display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  image-rendering: pixelated;
   border: 3px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
-  touch-action: none;
-}
-
-/* Mobile — no chrome, flush to screen edges */
-@media (max-width: 900px) {
-  .game-wrapper {
-    margin-top: 0;
-  }
-  .game-canvas {
-    border: none;
-    border-radius: 0;
-    box-shadow: none;
-  }
+  touch-action: none; /* prevent browser scroll/zoom on canvas touch */
 }
 
 /* ── Portrait overlay ────────────────────────────────────────────────────── */
@@ -1991,6 +1960,36 @@ onUnmounted(() => {
   to   { transform: rotate(85deg); }
 }
 
+/* Restart button */
+.restart-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 30;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(26, 14, 6, 0.72);
+  border: 1px solid rgba(169, 124, 58, 0.4);
+  border-radius: 50%;
+  color: rgba(242, 232, 213, 0.85);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background 0.2s, border-color 0.2s;
+  padding: 0;
+}
+.restart-btn:hover {
+  background: rgba(42, 26, 12, 0.9);
+  border-color: rgba(169, 124, 58, 0.7);
+}
+.restart-btn svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
 /* Mute button */
 .mute-btn {
   position: absolute;
@@ -2019,6 +2018,22 @@ onUnmounted(() => {
   width: 18px;
   height: 18px;
   pointer-events: none;
+}
+
+/* Mobile landscape — fill the full screen */
+@media (max-width: 900px) and (orientation: landscape) {
+  .game-wrapper {
+    padding: 0;
+    margin-top: 0;
+  }
+  .canvas-frame {
+    width: min(100vw, calc(100dvh * 1.7778));
+  }
+  .game-canvas {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
 }
 
 /* ── Touch D-pad buttons ──────────────────────────────────────────────────── */
