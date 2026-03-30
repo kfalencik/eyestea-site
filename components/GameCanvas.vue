@@ -47,6 +47,33 @@
           <p class="name-entry-eyebrow">GAME OVER</p>
           <h2 class="name-entry-title">Enter your name</h2>
           <p class="name-entry-sub">for the leaderboard <span class="name-entry-limit">&nbsp;(max 10 characters)</span></p>
+          <!-- Run stats snapshot -->
+          <div v-if="gameStats" class="run-stats-grid">
+            <div class="run-stat">
+              <span class="run-stat-val">{{ gameStats.score.toLocaleString() }}</span>
+              <span class="run-stat-lbl">Score</span>
+            </div>
+            <div class="run-stat">
+              <span class="run-stat-val">{{ gameStats.totalCaught }}</span>
+              <span class="run-stat-lbl">Cans Caught</span>
+            </div>
+            <div class="run-stat">
+              <span class="run-stat-val">×{{ gameStats.bestCombo }}</span>
+              <span class="run-stat-lbl">Best Streak</span>
+            </div>
+            <div class="run-stat">
+              <span class="run-stat-val">{{ gameStats.goldenCaught }}</span>
+              <span class="run-stat-lbl">Golden Cans</span>
+            </div>
+            <div class="run-stat">
+              <span class="run-stat-val">{{ gameStats.timeFormatted }}</span>
+              <span class="run-stat-lbl">Time Survived</span>
+            </div>
+            <div class="run-stat" :class="{ 'run-stat--gold': gameStats.earnedDiscount > 0 }">
+              <span class="run-stat-val">{{ gameStats.earnedDiscount > 0 ? gameStats.earnedDiscount + '% OFF' : '—' }}</span>
+              <span class="run-stat-lbl">Discount</span>
+            </div>
+          </div>
           <input
             ref="nameInputRef"
             v-model="playerName"
@@ -71,12 +98,71 @@
         </div>
       </div>
     </Transition>
+
+    <!-- Leaderboard overlay (shown after name entry closes) -->
+    <Transition name="leaderboard-fade">
+      <div v-if="showLeaderboard" class="leaderboard-overlay">
+        <div class="leaderboard-card">
+          <p class="lb-eyebrow">GAME OVER</p>
+          <h2 class="lb-title">Leaderboard</h2>
+          <!-- Current run badge -->
+          <div v-if="gameStats" class="lb-run-badge">
+            <span class="lb-run-score">{{ gameStats.score.toLocaleString() }}</span>
+            <span class="lb-run-label">your score this run</span>
+            <span v-if="gameStats.earnedDiscount > 0" class="lb-run-discount">
+              🎁 {{ gameStats.earnedDiscount }}% off earned
+            </span>
+          </div>
+          <!-- Loading state -->
+          <div v-if="leaderboardLoading" class="lb-loading">Loading…</div>
+          <!-- Scores table -->
+          <table v-else class="lb-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Name</th>
+                <th>Score</th>
+                <th>Cans</th>
+                <th>Streak</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(row, i) in leaderboardRows"
+                :key="row.id"
+                :class="{ 'lb-row--me': row.id === savedDocId }"
+              >
+                <td class="lb-rank">{{ i + 1 }}</td>
+                <td class="lb-name">{{ row.name }}</td>
+                <td class="lb-score">{{ row.score.toLocaleString() }}</td>
+                <td>{{ row.totalCaught }}</td>
+                <td>×{{ row.bestCombo }}</td>
+                <td>{{ formatTime(row.timeSurvived) }}</td>
+              </tr>
+              <tr v-if="!leaderboardRows.length">
+                <td colspan="6" class="lb-empty">No scores yet — you could be first!</td>
+              </tr>
+            </tbody>
+          </table>
+          <!-- Action buttons -->
+          <div class="lb-actions">
+            <button class="lb-btn lb-btn--play" @click="beginPlaying">▶ Play Again</button>
+            <button
+              v-if="gameStats && gameStats.earnedDiscount > 0"
+              class="lb-btn lb-btn--shop"
+              @click="applyDiscount"
+            >🛒 Claim {{ gameStats.earnedDiscount }}% Off</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { saveScore } from '~/composables/useFirebase.js'
+import { saveScore, getTopScores } from '~/composables/useFirebase.js'
 
 const isPortrait     = ref(false)
 const isTouchDevice  = ref(false)
@@ -86,12 +172,19 @@ const toastText      = ref('')
 let   toastTimer     = null
 
 // ── Name-entry overlay ───────────────────────────────────────────────────────
-const showNameEntry  = ref(false)
-const playerName     = ref('')
-const nameInputRef   = ref(null)
-const nameSaving     = ref(false)
-const nameSaved      = ref(false)
-const nameError      = ref('')
+const showNameEntry      = ref(false)
+const playerName         = ref('')
+const nameInputRef       = ref(null)
+const nameSaving         = ref(false)
+const nameSaved          = ref(false)
+const nameError          = ref('')
+const gameStats          = ref(null)   // snapshot of stats when game ends
+const savedDocId         = ref(null)   // Firestore doc ID on successful save
+
+// ── Leaderboard overlay ──────────────────────────────────────────────────────
+const showLeaderboard    = ref(false)
+const leaderboardRows    = ref([])
+const leaderboardLoading = ref(false)
 
 function checkOrientation () {
   const w = window.innerWidth
@@ -341,6 +434,8 @@ function goToStart () {
   dragActive = false
   touchLeft  = false
   touchRight = false
+  showLeaderboard.value = false
+  showNameEntry.value   = false
   unlockScroll()
 }
 
@@ -355,11 +450,34 @@ function applyDiscount () {
 }
 
 // ── Name entry / leaderboard save ─────────────────────────────────────────────
+function triggerGameOver () {
+  gameState      = 'gameover'
+  earnedDiscount = score >= 10000 ? 25 : score >= 2000 ? 10 : score >= 1000 ? 5 : 0
+  stopMusic()
+  playGameOverSound()
+  unlockScroll()
+  triggerNameEntry()
+}
+
 function triggerNameEntry () {
-  playerName.value  = ''
-  nameError.value   = ''
-  nameSaving.value  = false
-  nameSaved.value   = false
+  playerName.value      = ''
+  nameError.value       = ''
+  nameSaving.value      = false
+  nameSaved.value       = false
+  savedDocId.value      = null
+  showLeaderboard.value = false
+  const secs = Math.floor(difficultyTimer / 60)
+  gameStats.value = {
+    score,
+    totalCaught,
+    goldenCaught,
+    bestCombo,
+    bombsHit,
+    powerUpsUsed,
+    timeSurvived:  secs,
+    timeFormatted: `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`,
+    earnedDiscount,
+  }
   showNameEntry.value = true
   nextTick(() => nameInputRef.value?.focus())
 }
@@ -380,9 +498,10 @@ async function submitName () {
       timeSurvived: Math.floor(difficultyTimer / 60),
       earnedDiscount,
     }
-    await saveScore(name, stats)
-    nameSaved.value = true
-    setTimeout(() => { showNameEntry.value = false }, 1200)
+    const docId = await saveScore(name, stats)
+    savedDocId.value = docId
+    nameSaved.value  = true
+    setTimeout(() => { showNameEntry.value = false; openLeaderboard() }, 1200)
   } catch (err) {
     console.error('[GameCanvas] saveScore error:', err)
     nameError.value = 'Could not save — check your connection.'
@@ -393,6 +512,25 @@ async function submitName () {
 
 function skipNameEntry () {
   showNameEntry.value = false
+  openLeaderboard()
+}
+
+async function openLeaderboard () {
+  showLeaderboard.value    = true
+  leaderboardLoading.value = true
+  leaderboardRows.value    = []
+  try {
+    leaderboardRows.value = await getTopScores(10)
+  } catch (err) {
+    console.error('[GameCanvas] getTopScores error:', err)
+  } finally {
+    leaderboardLoading.value = false
+  }
+}
+
+function formatTime (secs = 0) {
+  if (secs == null) return '—'
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
 }
 
 function playCatch (comboVal = 1) {
@@ -893,6 +1031,8 @@ function beginPlaying () {
   spawnTimer          = 0
   cart.x              = WIDTH / 2 - CART_W / 2
   cart.w              = CART_W
+  showLeaderboard.value = false
+  showNameEntry.value   = false
   lockScroll()
   startMusic()
   requestGyro()
@@ -1074,12 +1214,7 @@ function update () {
           playBombHit()
           floatTexts.push({ text: `💥 −${penalty} PTS, −1 LIFE!`, x: hCX, y: h.y - 20, life: 80, maxLife: 80, color: '#ef4444', size: 22 })
           if (missed >= MAX_MISSED) {
-            gameState      = 'gameover'
-            earnedDiscount = score >= 10000 ? 25 : score >= 2000 ? 10 : score >= 1000 ? 5 : 0
-            stopMusic()
-            playGameOverSound()
-            unlockScroll()
-            triggerNameEntry()
+            triggerGameOver()
           }
         }
       }
@@ -2537,11 +2672,7 @@ function onTouchStart (e) {
     if (isOnPlayAgainBtn(e)) beginPlaying()
     return
   }
-  if (gameState === 'gameover') {
-    if (isOnShopBtn(e))           applyDiscount()
-    else if (isOnPlayAgainBtn(e)) beginPlaying()
-    return
-  }
+  if (gameState === 'gameover') return
   if (gameState !== 'playing') return
 
   for (const touch of e.changedTouches) {
@@ -2598,8 +2729,24 @@ function onTouchEnd (e) {
 
 // ── Keyboard input ────────────────────────────────────────────────────────────
 function onKeyDown (e) {
+  // Global shortcuts available any time
+  if (e.key === 'r' || e.key === 'R') {
+    e.preventDefault()
+    beginPlaying()
+    return
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    goToStart()
+    return
+  }
+  if (e.key === 'Backspace' && gameState === 'playing') {
+    e.preventDefault()
+    triggerGameOver()
+    return
+  }
   if (gameState === 'start') { beginPlaying(); return }
-  if (gameState === 'gameover') return  // no accidental restart before reading score
+  if (gameState === 'gameover') return
   if (e.key === 'ArrowLeft'  || e.key === 'a') keys.left  = true
   if (e.key === 'ArrowRight' || e.key === 'd') keys.right = true
 }
@@ -2610,9 +2757,6 @@ function onKeyUp (e) {
 function onClick (e) {
   if (gameState === 'start') {
     if (isOnPlayAgainBtn(e)) beginPlaying()
-  } else if (gameState === 'gameover') {
-    if (isOnShopBtn(e))           applyDiscount()
-    else if (isOnPlayAgainBtn(e)) beginPlaying()
   }
 }
 
@@ -2871,7 +3015,7 @@ onUnmounted(() => {
 /* ── Discount toast ──────────────────────────────────────────────────────── */
 .discount-toast {
   position: fixed;
-  bottom: 36px;
+  top: 36px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 9999;
@@ -2894,8 +3038,8 @@ onUnmounted(() => {
 
 .toast-slide-enter-active { transition: all 0.45s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .toast-slide-leave-active  { transition: all 0.35s ease-in; }
-.toast-slide-enter-from    { opacity: 0; transform: translateX(-50%) translateY(20px) scale(0.88); }
-.toast-slide-leave-to      { opacity: 0; transform: translateX(-50%) translateY(20px) scale(0.88); }
+.toast-slide-enter-from    { opacity: 0; transform: translateX(-50%) translateY(-20px) scale(0.88); }
+.toast-slide-leave-to      { opacity: 0; transform: translateX(-50%) translateY(-20px) scale(0.88); }
 
 /* ── Name-entry overlay ──────────────────────────────────────────────────── */
 .name-entry-overlay {
@@ -3027,4 +3171,202 @@ onUnmounted(() => {
 .name-entry-fade-leave-active  { transition: all 0.25s ease-in; }
 .name-entry-fade-enter-from    { opacity: 0; transform: scale(0.90); }
 .name-entry-fade-leave-to      { opacity: 0; transform: scale(0.94); }
+
+/* ── Run stats grid (inside name-entry card) ─────────────────────────────────── */
+.run-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px 12px;
+  width: 100%;
+  margin: 2px 0 8px;
+  padding: 14px 10px 12px;
+  background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(169,124,58,0.20);
+  border-radius: 8px;
+}
+
+.run-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.run-stat-val {
+  font-family: monospace;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #f2e8d5;
+  letter-spacing: 0.02em;
+}
+
+.run-stat-lbl {
+  font-family: monospace;
+  font-size: 0.56rem;
+  letter-spacing: 0.10em;
+  color: rgba(242,232,213,0.40);
+  text-transform: uppercase;
+}
+
+.run-stat--gold .run-stat-val { color: #c07830; }
+
+/* ── Leaderboard overlay ────────────────────────────────────────────────────── */
+.leaderboard-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  background: rgba(8, 4, 1, 0.92);
+  backdrop-filter: blur(10px);
+  border-radius: 6px;
+  overflow-y: auto;
+  padding: 24px 12px;
+}
+
+.leaderboard-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  max-width: 580px;
+  text-align: center;
+}
+
+.lb-eyebrow {
+  font-family: monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  color: rgba(192,90,60,0.85);
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.lb-title {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 2.4rem;
+  font-weight: 700;
+  color: #f2e8d5;
+  margin: 0;
+  line-height: 1.05;
+}
+
+.lb-run-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 24px;
+  background: rgba(169,124,58,0.10);
+  border: 1px solid rgba(169,124,58,0.30);
+  border-radius: 8px;
+  width: 100%;
+}
+
+.lb-run-score {
+  font-family: monospace;
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: #e8d49a;
+  letter-spacing: 0.04em;
+}
+
+.lb-run-label {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-style: italic;
+  font-size: 0.85rem;
+  color: rgba(242,232,213,0.48);
+}
+
+.lb-run-discount {
+  font-family: monospace;
+  font-size: 0.72rem;
+  color: #a97c3a;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+
+.lb-loading {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: rgba(242,232,213,0.40);
+  letter-spacing: 0.08em;
+  padding: 16px 0;
+}
+
+.lb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: monospace;
+  font-size: 0.80rem;
+}
+
+.lb-table th {
+  padding: 6px 8px;
+  text-align: left;
+  color: rgba(169,124,58,0.70);
+  font-size: 0.60rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(169,124,58,0.20);
+}
+
+.lb-table td {
+  padding: 8px 8px;
+  color: rgba(242,232,213,0.70);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.lb-table tr:last-child td { border-bottom: none; }
+
+.lb-row--me td {
+  color: #e8d49a;
+  background: rgba(169,124,58,0.10);
+}
+
+.lb-rank  { color: rgba(242,232,213,0.30); width: 24px; }
+.lb-name  { color: #f2e8d5; font-weight: 700; }
+.lb-score { color: #e8d49a; }
+.lb-empty { text-align: center; padding: 18px 0; color: rgba(242,232,213,0.32); font-style: italic; }
+
+.lb-actions {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+
+.lb-btn {
+  flex: 1;
+  padding: 12px 0;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s, border-color 0.15s, box-shadow 0.15s;
+  border: 1px solid;
+}
+.lb-btn:active { transform: scale(0.96); }
+
+.lb-btn--play {
+  background: linear-gradient(135deg, rgba(169,124,58,0.22), rgba(169,124,58,0.08));
+  border-color: rgba(169,124,58,0.50);
+  color: #f2e8d5;
+}
+.lb-btn--play:hover { border-color: rgba(169,124,58,0.90); box-shadow: 0 0 14px rgba(169,124,58,0.20); }
+
+.lb-btn--shop {
+  background: linear-gradient(135deg, rgba(74,222,128,0.14), rgba(20,120,60,0.10));
+  border-color: rgba(74,222,128,0.40);
+  color: #d4f5e2;
+}
+.lb-btn--shop:hover { border-color: rgba(74,222,128,0.75); box-shadow: 0 0 14px rgba(74,222,128,0.18); }
+
+.leaderboard-fade-enter-active { transition: all 0.40s cubic-bezier(0.34, 1.2, 0.64, 1); }
+.leaderboard-fade-leave-active  { transition: all 0.25s ease-in; }
+.leaderboard-fade-enter-from    { opacity: 0; transform: scale(0.94); }
+.leaderboard-fade-leave-to      { opacity: 0; transform: scale(0.97); }
 </style>
