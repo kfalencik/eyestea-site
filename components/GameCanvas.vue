@@ -1,5 +1,5 @@
 <template>
-  <div class="game-wrapper">
+  <div class="game-wrapper" :class="{ 'game-active': isPlaying }">
     <!-- Portrait / too-small overlay -->
     <Transition name="portrait-fade">
       <div v-if="isPortrait" class="portrait-overlay">
@@ -41,6 +41,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 
 const isPortrait    = ref(false)
 const isTouchDevice = ref(false)
+const isPlaying     = ref(false)
 
 function checkOrientation () {
   const w = window.innerWidth
@@ -82,6 +83,10 @@ let gyroGamma  = 0
 // Touch drag state
 let dragActive   = false
 let dragLastX    = 0   // canvas-space X of last touchmove
+
+// Side-press steering (tap left/right half of screen)
+let touchLeft    = false
+let touchRight   = false
 
 function onDeviceOrientation (e) {
   gyroGamma = e.gamma ?? 0
@@ -225,16 +230,17 @@ function toggleMute () {
   if (masterGain) masterGain.gain.value = isMuted.value ? 0 : 1
 }
 
+let savedScrollY = 0
+
 function lockScroll () {
-  document.body.style.overflow = 'hidden'
-  document.documentElement.style.overflow = 'hidden'
+  savedScrollY = window.scrollY
+  isPlaying.value = true
   document.body.classList.add('game-playing')
   if (canvasRef.value) canvasRef.value.style.cursor = 'none'
 }
 
 function unlockScroll () {
-  document.body.style.overflow = ''
-  document.documentElement.style.overflow = ''
+  isPlaying.value = false
   document.body.classList.remove('game-playing')
   if (canvasRef.value) canvasRef.value.style.cursor = ''
 }
@@ -247,6 +253,9 @@ function goToStart () {
   particles.length = 0
   floatTexts.length = 0
   gameState = 'start'
+  dragActive = false
+  touchLeft  = false
+  touchRight = false
   unlockScroll()
 }
 
@@ -637,10 +646,6 @@ function beginPlaying () {
   spawnTimer          = 0
   cart.x              = WIDTH / 2 - CART_W / 2
   cart.w              = CART_W
-  // Scroll canvas into view and lock page scrolling
-  if (canvasRef.value) {
-    canvasRef.value.closest('.game-wrapper')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
   lockScroll()
   startMusic()
   requestGyro()
@@ -687,10 +692,10 @@ function update () {
   }
 
   // Move cart — keyboard
-  if (keys.left)  cart.x = Math.max(0, cart.x - CART_SPD * dt)
-  if (keys.right) cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD * dt)
-  // Gyro override on mobile — only when not dragging
-  if (gyroActive && !dragActive) {
+  if (keys.left  || touchLeft)  cart.x = Math.max(0, cart.x - CART_SPD * dt)
+  if (keys.right || touchRight) cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD * dt)
+  // Gyro override on mobile — only when not dragging or side-pressing
+  if (gyroActive && !dragActive && !touchLeft && !touchRight) {
     const DEAD = 5
     const tilt = gyroGamma
     if (Math.abs(tilt) > DEAD) {
@@ -1972,37 +1977,80 @@ function isOnCtaButton (e) {
   return cx >= btnX && cx <= btnX + btnW && cy >= btnY && cy <= btnY + btnH
 }
 
-// ── Touch input — tap to start/restart only; movement via buttons ───────────
+// ── Touch input ─────────────────────────────────────────────────────────────
+function getTouchCanvasX (touch) {
+  const rect   = canvasRef.value.getBoundingClientRect()
+  return (touch.clientX - rect.left) * (WIDTH / rect.width)
+}
+
+function getTouchCanvasY (touch) {
+  const rect   = canvasRef.value.getBoundingClientRect()
+  return (touch.clientY - rect.top) * (HEIGHT / rect.height)
+}
+
+function isOnCart (cx) {
+  // generous hit-target: full cart width + 32 px padding each side
+  return cx >= cart.x - 32 && cx <= cart.x + cart.w + 32
+}
+
 function onTouchStart (e) {
   e.preventDefault()
   if (gameState === 'start' || gameState === 'gameover') {
     if (isOnCtaButton(e)) beginPlaying()
     return
   }
-  if (gameState === 'playing' && e.touches.length > 0) {
-    const canvas = canvasRef.value
-    const rect   = canvas.getBoundingClientRect()
-    const scaleX = WIDTH / rect.width
-    dragLastX  = (e.touches[0].clientX - rect.left) * scaleX
-    dragActive = true
+  if (gameState !== 'playing') return
+
+  for (const touch of e.changedTouches) {
+    const cx = getTouchCanvasX(touch)
+    if (isOnCart(cx)) {
+      // Cart drag
+      dragActive = true
+      dragLastX  = cx
+    } else {
+      // Side-press steering
+      if (cx < WIDTH / 2) touchLeft  = true
+      else                touchRight = true
+    }
   }
 }
 
 function onTouchMove (e) {
   e.preventDefault()
-  if (gameState !== 'playing' || !dragActive || e.touches.length === 0) return
-  const canvas = canvasRef.value
-  const rect   = canvas.getBoundingClientRect()
-  const scaleX = WIDTH / rect.width
-  const newX   = (e.touches[0].clientX - rect.left) * scaleX
-  const delta  = newX - dragLastX
-  dragLastX    = newX
+  if (gameState !== 'playing') return
+  if (!dragActive) return
+  const touch = e.touches[0]
+  if (!touch) return
+  const newX  = getTouchCanvasX(touch)
+  const delta = newX - dragLastX
+  dragLastX   = newX
   cart.x = Math.max(0, Math.min(WIDTH - cart.w, cart.x + delta))
 }
 
 function onTouchEnd (e) {
   e.preventDefault()
-  dragActive = false
+  if (gameState !== 'playing') return
+  // Release drag
+  if (e.touches.length === 0) {
+    dragActive = false
+    touchLeft  = false
+    touchRight = false
+    return
+  }
+  // Recalculate side-press state from remaining touches
+  touchLeft  = false
+  touchRight = false
+  for (const touch of e.touches) {
+    const cx = getTouchCanvasX(touch)
+    if (!isOnCart(cx)) {
+      if (cx < WIDTH / 2) touchLeft  = true
+      else                touchRight = true
+    }
+  }
+  // If the dragging finger lifted and another finger remains, switch to side-press
+  if (dragActive && e.touches.length > 0) {
+    dragActive = false
+  }
 }
 
 // ── Keyboard input ────────────────────────────────────────────────────────────
@@ -2065,6 +2113,18 @@ onUnmounted(() => {
   width: 100%;
   padding: 24px 0;
   margin-top: 50px;
+}
+
+/* Active play mode — cover the full viewport above everything */
+.game-wrapper.game-active {
+  position: fixed;
+  inset: 0;
+  z-index: 8000;
+  background: #1a0e06;
+  padding: 0;
+  margin: 0;
+  width: 100vw;
+  height: 100dvh;
 }
 
 /* In fullscreen mode, fill the screen and centre the canvas */

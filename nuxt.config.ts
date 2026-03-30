@@ -13,7 +13,7 @@ export default defineNuxtConfig({
       title: 'Eyes Tea — Alcoholic Iced Tea',
       meta: [
         { charset: 'utf-8' },
-        { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+        { name: 'viewport', content: 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no' },
         { name: 'description', content: 'Eyes Tea — Premium alcoholic iced tea. Peach Lemon & Raspberry Lemon.' },
         { name: 'theme-color', content: '#f2e8d5' }
       ],

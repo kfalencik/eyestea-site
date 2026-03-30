@@ -5,7 +5,7 @@
       <img :src="'/Emblem.svg'" alt="Eyes Tea" class="w-9 h-9" style="filter: brightness(0) sepia(1) saturate(2) hue-rotate(10deg) brightness(0.4);" />
     </div>
 
-    <nav class="hidden md:flex items-center gap-8">
+    <nav class="items-center hidden gap-8 md:flex">
       <a
         v-for="link in links"
         :key="link.href"
@@ -15,7 +15,7 @@
     </nav>
 
     <button
-      class="relative btn-outline text-xs py-2 px-5"
+      class="relative px-5 py-2 text-xs btn-outline"
       @click="$emit('openCart')"
       aria-label="Open basket"
     >
@@ -59,10 +59,6 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
   transition: transform 0.3s ease;
 }
 .nav-bar--hidden {
-  transform: translateY(-110%);
-}
-
-:global(body.game-playing) .nav-bar {
   transform: translateY(-110%);
 }
 </style>
