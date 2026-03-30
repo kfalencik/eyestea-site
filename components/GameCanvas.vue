@@ -12,6 +12,19 @@
     </Transition>
     <div class="canvas-frame">
       <canvas ref="canvasRef" :width="canvasWidth" :height="canvasHeight" class="game-canvas" />
+
+      <!-- Play button overlay (start screen only, touch devices) -->
+      <Transition name="play-fade">
+        <button
+          v-if="isTouchDevice && !isPlaying"
+          class="play-btn"
+          @click="onPlayBtnClick"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Play
+        </button>
+      </Transition>
+
       <!-- Mute button -->
       <button class="mute-btn" @click="toggleMute" :aria-label="isMuted ? 'Unmute' : 'Mute'">
         <svg v-if="!isMuted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -25,6 +38,18 @@
           <line x1="17" y1="9" x2="23" y2="15"/>
         </svg>
       </button>
+
+      <!-- Exit button (touch devices, while playing) -->
+      <Transition name="play-fade">
+        <button
+          v-if="isTouchDevice && isPlaying"
+          class="exit-btn"
+          @click="exitGame"
+          aria-label="Exit game"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </Transition>
     </div>
   </div>
 </template>
@@ -34,6 +59,35 @@ import { ref, onMounted, onUnmounted } from 'vue'
 
 const isPortrait    = ref(false)
 const isTouchDevice = ref(false)
+const isPlaying     = ref(false)
+
+function enterGame () {
+  isPlaying.value = true
+  // Scroll canvas into view
+  canvasRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  // Lock body scroll and hide cursor while in-game
+  document.body.style.overflow = 'hidden'
+  document.documentElement.style.overflow = 'hidden'
+  document.body.style.cursor = 'none'
+}
+
+function exitGame () {
+  // Return to start screen
+  if (gameState !== 'start') {
+    gameState = 'start'
+    stopMusic()
+    if (activePowerUp) deactivatePowerUp()
+    cans.length = 0
+    hazards.length = 0
+    particles.length = 0
+    floatTexts.length = 0
+  }
+  isPlaying.value = false
+  // Restore scroll and cursor
+  document.body.style.overflow = ''
+  document.documentElement.style.overflow = ''
+  document.body.style.cursor = ''
+}
 
 function checkOrientation () {
   const w = window.innerWidth
@@ -43,7 +97,7 @@ function checkOrientation () {
 
 // ── Canvas dimensions ─────────────────────────────────────────────────────────
 const WIDTH  = 2220
-const HEIGHT = 1024
+const HEIGHT = 1280
 
 // ── Dynamic display size + draw transform ────────────────────────────────────
 const canvasWidth  = ref(WIDTH)
@@ -95,31 +149,9 @@ let gameState = 'start'
 
 const keys = { left: false, right: false }
 
-// Gyroscope state
-let gyroActive = false
-let gyroGamma  = 0
-
-function onDeviceOrientation (e) {
-  gyroGamma = e.gamma ?? 0
-}
-
-async function requestGyro () {
-  if (typeof DeviceOrientationEvent !== 'undefined' &&
-      typeof DeviceOrientationEvent.requestPermission === 'function') {
-    // iOS 13+ requires explicit permission via a user gesture
-    try {
-      const perm = await DeviceOrientationEvent.requestPermission()
-      if (perm === 'granted') {
-        window.addEventListener('deviceorientation', onDeviceOrientation)
-        gyroActive = true
-      }
-    } catch (_) { /* permission denied or unavailable */ }
-  } else if (typeof DeviceOrientationEvent !== 'undefined') {
-    // Android / desktop — no permission required
-    window.addEventListener('deviceorientation', onDeviceOrientation)
-    gyroActive = true
-  }
-}
+// Drag-to-move state (touch / pointer)
+let dragActive  = false
+let dragLastX   = 0  // in canvas CSS pixels
 
 // Cart lives at bottom of canvas
 const cart = {
@@ -611,7 +643,6 @@ function beginPlaying () {
   cart.x              = WIDTH / 2 - CART_W / 2
   cart.w              = CART_W
   startMusic()
-  requestGyro()
 }
 
 function loop (now) {
@@ -620,7 +651,7 @@ function loop (now) {
   lastTime  = now
   dt = raw / 16.6667  // 1.0 = exactly 60fps; 2.0 = 30fps, etc.
 
-  // Map game-world coords (2220×1024) into the display canvas
+  // Map game-world coords (2220×1280) into the display canvas
   ctx.setTransform(drawScale, 0, 0, drawScale, drawOffsetX, drawOffsetY)
 
   if (gameState === 'start') {
@@ -662,17 +693,6 @@ function update () {
   // Move cart — keyboard
   if (keys.left)  cart.x = Math.max(0, cart.x - CART_SPD * dt)
   if (keys.right) cart.x = Math.min(WIDTH - cart.w, cart.x + CART_SPD * dt)
-  // Gyro override on mobile
-  if (gyroActive) {
-    const DEAD = 5
-    const tilt = gyroGamma
-    if (Math.abs(tilt) > DEAD) {
-      const frac = (Math.abs(tilt) - DEAD) / (90 - DEAD)
-      const spd  = frac * CART_SPD * 2.2
-      if (tilt < 0) cart.x = Math.max(0, cart.x - spd * dt)
-      else          cart.x = Math.min(WIDTH - cart.w, cart.x + spd * dt)
-    }
-  }
 
   // Shake & flash decay
   if (shakeFrames > 0)        shakeFrames        -= dt
@@ -1777,14 +1797,45 @@ function drawHUD () {
   ctx.fillStyle    = 'rgba(255,255,255,0.25)'
   ctx.textAlign    = 'center'
   ctx.textBaseline = 'bottom'
-  ctx.fillText(gyroActive ? 'Tilt to steer' : '← →  or  A / D  to move', WIDTH / 2, HEIGHT - 10)
+  ctx.fillText('Drag to steer  •  ← → / A D  on keyboard', WIDTH / 2, HEIGHT - 10)
   ctx.restore()
 }
 
-// ── Touch input — tap to start/restart only; movement via buttons ───────────
+// Play button (touch start screen)
+function onPlayBtnClick () {
+  enterGame()
+  beginPlaying()
+}
+
+// ── Touch / pointer drag — move cart by dragging finger across screen ────────────
+function onPointerDown (e) {
+  if (e.pointerType === 'mouse') return  // mouse handled by click
+  e.preventDefault()
+  // On touch, only start drag if already playing
+  if (gameState !== 'playing') return
+  dragActive = true
+  dragLastX  = e.clientX
+  canvasRef.value.setPointerCapture(e.pointerId)
+}
+
+function onPointerMove (e) {
+  if (!dragActive || gameState !== 'playing') return
+  e.preventDefault()
+  const dx = e.clientX - dragLastX
+  dragLastX = e.clientX
+  // Convert CSS-pixel delta to game-world units
+  const gameDx = dx / drawScale
+  cart.x = Math.max(0, Math.min(WIDTH - cart.w, cart.x + gameDx))
+}
+
+function onPointerUp (e) {
+  if (e.pointerType === 'mouse') return
+  dragActive = false
+}
+
+// ── Touch input — block native scroll/zoom ─────────────────────────────────
 function onTouchStart (e) {
   e.preventDefault()
-  if (gameState === 'start' || gameState === 'gameover') beginPlaying()
 }
 
 function onTouchEnd (e) {
@@ -1803,6 +1854,8 @@ function onKeyUp (e) {
   if (e.key === 'ArrowRight' || e.key === 'd') keys.right = false
 }
 function onClick () {
+  // Desktop only — on touch, the Play button handles start
+  if (isTouchDevice.value) return
   if (gameState === 'start' || gameState === 'gameover') beginPlaying()
 }
 
@@ -1810,10 +1863,14 @@ onMounted(() => {
   ctx = canvasRef.value.getContext('2d')
   isTouchDevice.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
   computeDimensions()
-  canvasRef.value.addEventListener('click',       onClick)
-  canvasRef.value.addEventListener('touchstart',  onTouchStart,  { passive: false })
-  canvasRef.value.addEventListener('touchend',    onTouchEnd,    { passive: false })
-  canvasRef.value.addEventListener('touchcancel', onTouchEnd,    { passive: false })
+  canvasRef.value.addEventListener('click',        onClick)
+  canvasRef.value.addEventListener('touchstart',   onTouchStart,  { passive: false })
+  canvasRef.value.addEventListener('touchend',     onTouchEnd,    { passive: false })
+  canvasRef.value.addEventListener('touchcancel',  onTouchEnd,    { passive: false })
+  canvasRef.value.addEventListener('pointerdown',  onPointerDown, { passive: false })
+  canvasRef.value.addEventListener('pointermove',  onPointerMove, { passive: false })
+  canvasRef.value.addEventListener('pointerup',    onPointerUp)
+  canvasRef.value.addEventListener('pointercancel',onPointerUp)
   window.addEventListener('keydown',           onKeyDown)
   window.addEventListener('keyup',             onKeyUp)
   window.addEventListener('resize',            onResize)
@@ -1828,18 +1885,20 @@ function onResize () {
 }
 
 onUnmounted(() => {
+  exitGame()  // ensure scroll/cursor restored if component unmounts mid-game
   if (rafId) cancelAnimationFrame(rafId)
   stopMusic()
   if (audioCtx) { audioCtx.close(); audioCtx = null }
-  canvasRef.value?.removeEventListener('click',       onClick)
-  canvasRef.value?.removeEventListener('touchstart',  onTouchStart)
-  canvasRef.value?.removeEventListener('touchend',    onTouchEnd)
-  canvasRef.value?.removeEventListener('touchcancel', onTouchEnd)
-  window.removeEventListener('keydown',           onKeyDown)
-  window.removeEventListener('keyup',             onKeyUp)
-  window.removeEventListener('resize',             checkOrientation)
-  window.removeEventListener('orientationchange',  checkOrientation)
-  window.removeEventListener('deviceorientation',  onDeviceOrientation)
+  canvasRef.value?.removeEventListener('click',        onClick)
+  canvasRef.value?.removeEventListener('touchstart',   onTouchStart)
+  canvasRef.value?.removeEventListener('touchend',     onTouchEnd)
+  canvasRef.value?.removeEventListener('touchcancel',  onTouchEnd)
+  canvasRef.value?.removeEventListener('pointerdown',  onPointerDown)
+  canvasRef.value?.removeEventListener('pointermove',  onPointerMove)
+  canvasRef.value?.removeEventListener('pointerup',    onPointerUp)
+  canvasRef.value?.removeEventListener('pointercancel',onPointerUp)
+  window.removeEventListener('keydown',            onKeyDown)
+  window.removeEventListener('keyup',              onKeyUp)
   window.removeEventListener('resize',             onResize)
   window.removeEventListener('orientationchange',  onResize)
 })
@@ -1866,7 +1925,6 @@ onUnmounted(() => {
 /* Canvas display — 1:1 with its buffer; JS sets width/height attributes */
 .game-canvas {
   display: block;
-  image-rendering: pixelated;
   border: 3px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
