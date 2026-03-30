@@ -117,10 +117,11 @@ const MAX_MISSED      = 25   // game over threshold (5 lives)
 const MAX_CAUGHT_LOG  = 8    // how many recent catches to show in HUD
 
 function spawnCan () {
-  const types = ['peach', 'raspberry']
-  const type  = types[Math.floor(Math.random() * types.length)]
+  const r     = Math.random()
+  const type  = r < 0.05 ? 'golden' : (r < 0.525 ? 'peach' : 'raspberry')
   cans.push({
     type,
+    golden: type === 'golden',
     x: Math.random() * (WIDTH - CAN_W),
     y: -CAN_H,
     vy: 4.2 + Math.random() * 2.0,
@@ -133,7 +134,7 @@ function spawnCan () {
   })
 }
 
-function spawnHazard () {
+function spawnHazard (delay = 0) {
   hazards.push({
     x:        Math.max(25, Math.random() * (WIDTH - 74)),
     y:        -70,
@@ -143,6 +144,7 @@ function spawnHazard () {
     frame:    0,
     hit:      false,
     hitTimer: 0,
+    delay,        // frames to wait before entering play
   })
 }
 
@@ -172,8 +174,9 @@ let bombFlashFrames  = 0
 let powerUpFlashFrames = 0
 let powerUpFlashColor  = '#ffffff'
 let powerUpBanner      = null   // { pu, framesLeft, maxFrames }
-const HAZARD_START  = 600   // 10 s grace period before first bomb
-const HAZARD_BASE   = 420   // ~7 s between bombs initially
+const HAZARD_START  = 0     // bombs start immediately
+const HAZARD_BASE   = 420   // ~7 s between bomb waves initially
+const HAZARD_MIN    = 120   // floor — never faster than ~2 s
 
 // ── Power-ups ─────────────────────────────────────────────────────────────────
 const POWERUPS = [
@@ -705,15 +708,23 @@ function update () {
 
   // ── Hazard (bomb) spawn + update ────────────────────────────────────────────
   hazardTimer += dt
-  const hazardInterval = HAZARD_BASE
+  // Every 15 s (900 frames) interval shrinks by 30 frames, floored at HAZARD_MIN
+  const diffTier       = Math.floor(difficultyTimer / 900)
+  const hazardInterval = Math.max(HAZARD_MIN, HAZARD_BASE - diffTier * 30)
+  // Simultaneous bombs: 1 at tiers 0-2, 2 at 3-5, 3 at tier 6+
+  const hazardCount    = diffTier >= 6 ? 3 : diffTier >= 3 ? 2 : 1
   if (difficultyTimer >= HAZARD_START && hazardTimer >= hazardInterval) {
-    spawnHazard()
+    for (let _h = 0; _h < hazardCount; _h++) spawnHazard(_h * 45)
     hazardTimer = 0
   }
 
   for (let i = hazards.length - 1; i >= 0; i--) {
     const h = hazards[i]
     h.frame += dt
+    if (h.delay > 0) {
+      h.delay -= dt
+      continue  // off-screen, not yet active
+    }
     if (h.hit) {
       h.hitTimer += dt
       if (h.hitTimer > 40) hazards.splice(i, 1)
@@ -807,7 +818,8 @@ function update () {
       powerUpProgress++
       comboTimer = COMBO_WINDOW   // reset window on each catch
       streakMult  = Math.floor(combo / 10) + 1
-      score += scoreMultiplier * streakMult
+      const canPts = c.golden ? 50 : scoreMultiplier * streakMult
+      score += canPts
       caughtLog.push(c.type)
       if (caughtLog.length > MAX_CAUGHT_LOG) caughtLog.shift()
 
@@ -826,8 +838,9 @@ function update () {
       }
 
       // Burst particles
-      const pColor = c.type === 'peach' ? '#f97316' : '#ef4444'
-      for (let p = 0; p < 10; p++) {
+      const pColor = c.golden ? '#ffd700' : (c.type === 'peach' ? '#f97316' : '#ef4444')
+      const pCount = c.golden ? 18 : 10
+      for (let p = 0; p < pCount; p++) {
         const angle = Math.random() * Math.PI * 2
         const spd   = 2 + Math.random() * 3
         particles.push({
@@ -837,18 +850,19 @@ function update () {
           life: 28 + Math.floor(Math.random() * 15),
           maxLife: 43,
           color: pColor,
-          size: 3 + Math.random() * 3,
+          size: c.golden ? 4 + Math.random() * 4 : 3 + Math.random() * 3,
         })
       }
 
       // Float text
-      const pts   = scoreMultiplier * streakMult
-      const label = combo >= 2 ? `${combo}× STREAK! +${pts}` : `+${pts}`
+      const label = c.golden
+        ? `★ +50 ★`
+        : (combo >= 2 ? `${combo}× STREAK! +${canPts}` : `+${canPts}`)
       floatTexts.push({
         text: label, x: c.x + c.w / 2, y: c.y,
         life: 48, maxLife: 48,
-        color:  combo >= 2 ? '#fbbf24' : '#ffffff',
-        size:   combo >= 2 ? 22 : 16,
+        color:  c.golden ? '#ffd700' : (combo >= 2 ? '#fbbf24' : '#ffffff'),
+        size:   c.golden ? 26 : (combo >= 2 ? 22 : 16),
       })
     } else if (c.y > HEIGHT) {
       c.missed    = true
@@ -1204,19 +1218,35 @@ function draw () {
   // Falling / floor cans
   for (const c of cans) {
     ctx.save()
+    const baseType = c.golden ? 'peach' : c.type
     if (c.caught) {
       const alpha = 1 - c.crushTimer / 30
       ctx.globalAlpha = Math.max(0, alpha)
       const scale = 1 + c.crushTimer / 60
       ctx.translate(c.x + c.w / 2, c.y + c.h / 2)
       ctx.scale(scale, scale)
-      ctx.drawImage(imgs[c.type], -c.w / 2, -c.h / 2, c.w, c.h)
+      ctx.drawImage(imgs[baseType], -c.w / 2, -c.h / 2, c.w, c.h)
     } else if (c.missed) {
       const alpha = c.missTimer < 120 ? 1 : 1 - (c.missTimer - 120) / 60
       ctx.globalAlpha = Math.max(0, alpha)
-      ctx.drawImage(imgs[`${c.type}_crushed`], c.x, c.y, c.w, c.h)
+      ctx.drawImage(imgs[`${baseType}_crushed`], c.x, c.y, c.w, c.h)
     } else {
-      ctx.drawImage(imgs[c.type], c.x, c.y, c.w, c.h)
+      if (c.golden) {
+        // Animated glow pulse
+        const pulse = 12 + 8 * Math.sin(Date.now() / 200)
+        ctx.shadowColor = '#ffd700'
+        ctx.shadowBlur  = pulse
+        ctx.drawImage(imgs.peach, c.x, c.y, c.w, c.h)
+        ctx.shadowBlur  = 0
+        ctx.shadowColor = 'transparent'
+        // Gold tint overlay
+        ctx.globalAlpha = 0.28
+        ctx.fillStyle   = '#ffd700'
+        ctx.fillRect(c.x, c.y, c.w, c.h)
+        ctx.globalAlpha = 1
+      } else {
+        ctx.drawImage(imgs[c.type], c.x, c.y, c.w, c.h)
+      }
     }
     ctx.restore()
   }
@@ -1234,6 +1264,7 @@ function draw () {
 
   // ── Bombs ─────────────────────────────────────────────────────────────────
   for (const h of hazards) {
+    if (h.delay > 0) continue   // not yet active, skip drawing
     const cx = h.x + h.w / 2
     const cy = h.y + h.h * 0.62
     const r  = h.w * 0.44
