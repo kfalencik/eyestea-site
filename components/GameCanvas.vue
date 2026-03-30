@@ -33,6 +33,12 @@
         </svg>
       </button>
     </div>
+    <!-- Discount toast -->
+    <Transition name="toast-slide">
+      <div v-if="showToast" class="discount-toast" role="status" @click="showToast = false">
+        {{ toastText }}
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -42,6 +48,9 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 const isPortrait    = ref(false)
 const isTouchDevice = ref(false)
 const isPlaying     = ref(false)
+const showToast     = ref(false)
+const toastText     = ref('')
+let   toastTimer    = null
 
 function checkOrientation () {
   const w = window.innerWidth
@@ -72,7 +81,8 @@ let dt          = 1   // delta-time multiplier, normalised to 60fps
 const TOTAL_IMGS = 6  // background, cart, peach, raspberry + crushed variants
 
 // 'start' | 'playing'
-let gameState = 'start'
+let gameState      = 'start'
+let earnedDiscount = 0  // 0, 5, 10, or 25 percent
 
 const keys = { left: false, right: false }
 
@@ -182,7 +192,7 @@ function spawnTargetedHazard () {
 }
 
 // Score & catch log
-let score = 0
+let score = 1000
 let missed = 0
 const caughtLog = []   // recent catch types for HUD icons
 
@@ -293,6 +303,16 @@ function goToStart () {
   unlockScroll()
 }
 
+function applyDiscount () {
+  const pct = earnedDiscount
+  goToStart()
+  document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })
+  toastText.value = `🎁  ${pct}% discount applied — happy shopping!`
+  showToast.value = true
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { showToast.value = false }, 5000)
+}
+
 function playCatch (comboVal = 1) {
   ensureAudio()
   const semitones = Math.min(comboVal - 1, 8) * 2
@@ -307,6 +327,84 @@ function playCatch (comboVal = 1) {
   gain.gain.setValueAtTime(0.18, t)
   gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22)
   osc.start(t); osc.stop(t + 0.22)
+}
+
+function playGoldenCatch () {
+  ensureAudio()
+  const t = audioCtx.currentTime
+  // Coin-spin chime: fast staccato triangle plinks ascending then a shining tail
+  const coinNotes = [1318.5, 1567.98, 1975.53, 2637, 3136]
+  coinNotes.forEach((freq, i) => {
+    const osc  = audioCtx.createOscillator()
+    const gain = audioCtx.createGain()
+    osc.connect(gain); gain.connect(masterGain)
+    osc.type = 'triangle'
+    osc.frequency.value = freq
+    gain.gain.setValueAtTime(0.13, t + i * 0.04)
+    gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.04 + 0.18)
+    osc.start(t + i * 0.04); osc.stop(t + i * 0.04 + 0.18)
+  })
+  // Sparkling shimmer tail — two detuned sine waves
+  ;[2093, 2349].forEach((freq, i) => {
+    const osc  = audioCtx.createOscillator()
+    const gain = audioCtx.createGain()
+    osc.connect(gain); gain.connect(masterGain)
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(freq, t + 0.18)
+    osc.frequency.exponentialRampToValueAtTime(freq * 1.12, t + 0.55)
+    gain.gain.setValueAtTime(0.09, t + 0.18)
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.65)
+    osc.start(t + 0.18); osc.stop(t + 0.65)
+  })
+}
+
+function playBombDestroy (type = 'ghost') {
+  ensureAudio()
+  const t = audioCtx.currentTime
+  if (type === 'ghost') {
+    // Ethereal implosion: descending whoosh + hollow pop
+    const osc  = audioCtx.createOscillator()
+    const gain = audioCtx.createGain()
+    osc.connect(gain); gain.connect(masterGain)
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(600, t)
+    osc.frequency.exponentialRampToValueAtTime(80, t + 0.22)
+    gain.gain.setValueAtTime(0.18, t)
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28)
+    osc.start(t); osc.stop(t + 0.28)
+    // Airy noise puff
+    const buf  = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * 0.12), audioCtx.sampleRate)
+    const data = buf.getChannelData(0)
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 2)
+    const src  = audioCtx.createBufferSource()
+    const ng   = audioCtx.createGain()
+    src.buffer = buf; src.connect(ng); ng.connect(masterGain)
+    ng.gain.setValueAtTime(0.08, t + 0.02)
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.14)
+    src.start(t + 0.02)
+  } else {
+    // Ice shatter: crisp high crack + crystalline descend
+    const crack = audioCtx.createOscillator()
+    const cg    = audioCtx.createGain()
+    crack.connect(cg); cg.connect(masterGain)
+    crack.type = 'sawtooth'
+    crack.frequency.setValueAtTime(2400, t)
+    crack.frequency.exponentialRampToValueAtTime(400, t + 0.12)
+    cg.gain.setValueAtTime(0.16, t)
+    cg.gain.exponentialRampToValueAtTime(0.001, t + 0.14)
+    crack.start(t); crack.stop(t + 0.14)
+    // Tinkle cascade
+    ;[1760, 1396, 1047, 784].forEach((freq, i) => {
+      const osc  = audioCtx.createOscillator()
+      const gain = audioCtx.createGain()
+      osc.connect(gain); gain.connect(masterGain)
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      gain.gain.setValueAtTime(0.10, t + 0.05 + i * 0.055)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05 + i * 0.055 + 0.22)
+      osc.start(t + 0.05 + i * 0.055); osc.stop(t + 0.05 + i * 0.055 + 0.22)
+    })
+  }
 }
 
 function playMiss () {
@@ -870,7 +968,9 @@ function update () {
     ) {
       h.hit = true
       if (activePowerUp?.type === 'ghost' || activePowerUp?.type === 'freeze_bombs') {
-        const msg = activePowerUp.type === 'ghost' ? '👻 PHASED!' : '❄️ FROZEN!'
+        score += 25
+        playBombDestroy(activePowerUp.type === 'ghost' ? 'ghost' : 'freeze')
+        const msg = activePowerUp.type === 'ghost' ? '👻 PHASED! +25' : '❄️ FROZEN! +25'
         const col = activePowerUp.type === 'ghost' ? '#22d3ee' : '#bae6fd'
         floatTexts.push({ text: msg, x: hCX, y: h.y, life: 60, maxLife: 60, color: col, size: 22 })
       } else {
@@ -892,7 +992,8 @@ function update () {
           playBombHit()
           floatTexts.push({ text: `💥 −${penalty} PTS, −1 LIFE!`, x: hCX, y: h.y - 20, life: 80, maxLife: 80, color: '#ef4444', size: 22 })
           if (missed >= MAX_MISSED) {
-            gameState = 'gameover'
+            gameState      = 'gameover'
+            earnedDiscount = score >= 10000 ? 25 : score >= 2000 ? 10 : score >= 1000 ? 5 : 0
             stopMusic()
             playGameOverSound()
             unlockScroll()
@@ -956,7 +1057,8 @@ function update () {
       caughtLog.push(c.type)
       if (caughtLog.length > MAX_CAUGHT_LOG) caughtLog.shift()
 
-      playCatch(powerUpProgress)
+      if (c.golden) playGoldenCatch()
+      else           playCatch(powerUpProgress)
 
       // Power-up trigger every 10 consecutive catches
       if (powerUpProgress >= 10) {
@@ -1052,12 +1154,12 @@ function drawStartScreen () {
 
   // ── Drifting background cans ─────────────────────────────────────────────
   ;[
-    { x:  90, bY: 200, ph: 0.0,  img: 'peach',     sz: 52, al: 0.14, rot: -0.18 },
-    { x: 215, bY: 490, ph: 1.3,  img: 'raspberry', sz: 40, al: 0.11, rot:  0.22 },
-    { x:1080, bY: 215, ph: 0.7,  img: 'raspberry', sz: 52, al: 0.14, rot:  0.15 },
-    { x:1165, bY: 465, ph: 2.1,  img: 'peach',     sz: 40, al: 0.11, rot: -0.12 },
-    { x: 145, bY: 365, ph: 3.2,  img: 'raspberry', sz: 30, al: 0.08, rot:  0.30 },
-    { x:1115, bY: 345, ph: 1.9,  img: 'peach',     sz: 30, al: 0.08, rot: -0.24 },
+    { x:  90, bY: 200, ph: 0.0,  img: 'peach',     sz: 52, al: 0.70, rot: -0.18 },
+    { x: 215, bY: 490, ph: 1.3,  img: 'raspberry', sz: 40, al: 0.70, rot:  0.22 },
+    { x:1080, bY: 215, ph: 0.7,  img: 'raspberry', sz: 52, al: 0.70, rot:  0.15 },
+    { x:1165, bY: 465, ph: 2.1,  img: 'peach',     sz: 40, al: 0.70, rot: -0.12 },
+    { x: 145, bY: 365, ph: 3.2,  img: 'raspberry', sz: 30, al: 0.70, rot:  0.30 },
+    { x:1115, bY: 345, ph: 1.9,  img: 'peach',     sz: 30, al: 0.70, rot: -0.24 },
   ].forEach(c => {
     const img = imgs[c.img]
     ctx.save()
@@ -1244,12 +1346,12 @@ function drawGameOverScreen () {
 
   // ── Drifting background cans (same as start) ─────────────────────────────
   ;[
-    { x:  90, bY: 200, ph: 0.0,  img: 'peach',     sz: 52, al: 0.10, rot: -0.18 },
-    { x: 215, bY: 490, ph: 1.3,  img: 'raspberry', sz: 40, al: 0.08, rot:  0.22 },
-    { x:1080, bY: 215, ph: 0.7,  img: 'raspberry', sz: 52, al: 0.10, rot:  0.15 },
-    { x:1165, bY: 465, ph: 2.1,  img: 'peach',     sz: 40, al: 0.08, rot: -0.12 },
-    { x: 145, bY: 365, ph: 3.2,  img: 'raspberry', sz: 30, al: 0.06, rot:  0.30 },
-    { x:1115, bY: 345, ph: 1.9,  img: 'peach',     sz: 30, al: 0.06, rot: -0.24 },
+    { x:  90, bY: 200, ph: 0.0,  img: 'peach',     sz: 52, al: 0.70, rot: -0.18 },
+    { x: 215, bY: 490, ph: 1.3,  img: 'raspberry', sz: 40, al: 0.70, rot:  0.22 },
+    { x:1080, bY: 215, ph: 0.7,  img: 'raspberry', sz: 52, al: 0.70, rot:  0.15 },
+    { x:1165, bY: 465, ph: 2.1,  img: 'peach',     sz: 40, al: 0.70, rot: -0.12 },
+    { x: 145, bY: 365, ph: 3.2,  img: 'raspberry', sz: 30, al: 0.70, rot:  0.30 },
+    { x:1115, bY: 345, ph: 1.9,  img: 'peach',     sz: 30, al: 0.70, rot: -0.24 },
   ].forEach(c => {
     ctx.save()
     ctx.globalAlpha = c.al
@@ -1366,68 +1468,107 @@ function drawGameOverScreen () {
     ctx.restore()
   })
 
-  // ── Reward rows ───────────────────────────────────────────────────────────
-  const milestones = [
-    { threshold: 1000,  emoji: '🛒', reward: '5% off your next order' },
-    { threshold: 2000,  emoji: '⭐', reward: '10% off your next order' },
-    { threshold: 10000, emoji: '🎁', reward: '25% off your next order' },
-  ]
-  const rewardY  = gridY + 2 * (cellH + cellGap) + 14
-  const rewardW  = gridW
-  const rewardX  = gridX
-  const rowH     = 38
-
-  milestones.forEach((m, i) => {
-    const ry       = rewardY + i * (rowH + 4)
-    const unlocked = score >= m.threshold
-    ctx.save()
-    ctx.globalAlpha = unlocked ? 1 : 0.32
-    if (unlocked) {
-      ctx.fillStyle = 'rgba(169,124,58,0.10)'
-      roundRect(rewardX, ry, rewardW, rowH, 4); ctx.fill()
-      ctx.strokeStyle = 'rgba(169,124,58,0.25)'; ctx.lineWidth = 0.8
-      roundRect(rewardX, ry, rewardW, rowH, 4); ctx.stroke()
-    }
-    const midY = ry + rowH / 2
-    ctx.font = '16px serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
-    ctx.fillStyle = '#f2e8d5'
-    ctx.fillText(unlocked ? '✅' : '○', rewardX + 14, midY)
-    ctx.fillText(m.emoji, rewardX + 44, midY)
-    ctx.font      = `bold 15px "Cormorant Garamond", serif`
-    ctx.fillStyle = '#f2e8d5'
-    ctx.fillText(`${m.threshold} pts`, rewardX + 76, midY - 7)
-    ctx.font      = 'italic 13px "Cormorant Garamond", serif'
-    ctx.fillStyle = unlocked ? '#c05a3c' : 'rgba(242,232,213,0.5)'
-    ctx.fillText('→  ' + m.reward, rewardX + 76, midY + 9)
-    ctx.restore()
-  })
-
-  // ── Pulsing CTA button (matches start screen) ─────────────────────────────
-  const pulse  = 0.80 + 0.20 * Math.abs(Math.sin(t * 1.9))
-  const btnW   = 320, btnH = 54
-  const btnX   = CX - btnW / 2
-  const btnY   = HEIGHT - 72
+  // ── Earned reward showcase ────────────────────────────────────────────────
+  const rwY = gridY + 2 * (cellH + cellGap) + 18
+  const rwW = 460
+  const rwH = 100
+  const rwX = CX - rwW / 2
 
   ctx.save()
-  ctx.shadowColor = `rgba(169,124,58,${0.55 * pulse})`
-  ctx.shadowBlur  = 26 * pulse
-  const bG = ctx.createLinearGradient(btnX, btnY, btnX + btnW, btnY + btnH)
-  bG.addColorStop(0, '#2a1a0a'); bG.addColorStop(1, '#1a0e06')
-  ctx.fillStyle = bG
-  roundRect(btnX, btnY, btnW, btnH, 6); ctx.fill()
-  const bBord = ctx.createLinearGradient(btnX, 0, btnX + btnW, 0)
-  bBord.addColorStop(0,   'rgba(169,124,58,0.18)')
-  bBord.addColorStop(0.5, `rgba(169,124,58,${0.75 * pulse})`)
-  bBord.addColorStop(1,   'rgba(169,124,58,0.18)')
-  ctx.strokeStyle = bBord; ctx.lineWidth = 1.5
-  roundRect(btnX, btnY, btnW, btnH, 6); ctx.stroke()
-  ctx.textAlign    = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.font         = 'bold 15px monospace'
-  ctx.fillStyle    = `rgba(242,232,213,${0.72 + 0.28 * pulse})`
-  ctx.shadowColor  = 'transparent'
-  ctx.fillText('▶   PLAY AGAIN', CX, btnY + btnH / 2)
+  if (earnedDiscount > 0) {
+    const discEmoji = earnedDiscount >= 25 ? '🎁' : earnedDiscount >= 10 ? '⭐' : '🛒'
+    const pulse2    = 0.7 + 0.3 * Math.abs(Math.sin(t * 2.2))
+    // Ambient glow
+    const gg = ctx.createRadialGradient(CX, rwY + rwH / 2, 10, CX, rwY + rwH / 2, 240)
+    gg.addColorStop(0,   'rgba(169,124,58,0.20)')
+    gg.addColorStop(0.5, 'rgba(169,124,58,0.05)')
+    gg.addColorStop(1,   'rgba(0,0,0,0)')
+    ctx.fillStyle = gg; ctx.fillRect(0, 0, WIDTH, HEIGHT)
+    // Card bg
+    const rg = ctx.createLinearGradient(rwX, rwY, rwX, rwY + rwH)
+    rg.addColorStop(0, 'rgba(42,26,10,0.88)')
+    rg.addColorStop(1, 'rgba(20,10,4,0.88)')
+    ctx.fillStyle   = rg
+    ctx.shadowColor = 'rgba(169,124,58,0.45)'
+    ctx.shadowBlur  = 24
+    roundRect(rwX, rwY, rwW, rwH, 8); ctx.fill()
+    ctx.shadowBlur  = 0
+    ctx.strokeStyle = `rgba(169,124,58,${0.45 + 0.35 * pulse2})`
+    ctx.lineWidth   = 1.5
+    roundRect(rwX, rwY, rwW, rwH, 8); ctx.stroke()
+    // Emoji
+    ctx.font         = '34px serif'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle    = '#f2e8d5'
+    ctx.fillText(discEmoji, rwX + 22, rwY + rwH / 2)
+    // Label
+    ctx.font         = '11px monospace'
+    ctx.fillStyle    = 'rgba(169,124,58,0.85)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillText('YOU EARNED', rwX + 74, rwY + 18)
+    // Discount value
+    ctx.font         = `bold 38px "Cormorant Garamond", serif`
+    ctx.fillStyle    = '#ffd700'
+    ctx.shadowColor  = `rgba(255,215,0,${0.55 * pulse2})`
+    ctx.shadowBlur   = 18 * pulse2
+    ctx.textBaseline = 'top'
+    ctx.fillText(`${earnedDiscount}% OFF`, rwX + 74, rwY + 32)
+    ctx.shadowBlur   = 0
+    // Sub-label
+    ctx.font         = 'italic 15px "Cormorant Garamond", serif'
+    ctx.fillStyle    = 'rgba(192,90,60,0.90)'
+    ctx.textBaseline = 'top'
+    ctx.fillText('on your next Eyes Tea order', rwX + 74, rwY + 76)
+  } else {
+    ctx.font         = 'italic 17px "Cormorant Garamond", serif'
+    ctx.fillStyle    = 'rgba(242,232,213,0.32)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('Score 1,000+ points to earn a discount on your next order', CX, rwY + rwH / 2)
+  }
   ctx.restore()
+
+  // ── Buttons ───────────────────────────────────────────────────────────────
+  const pulse  = 0.80 + 0.20 * Math.abs(Math.sin(t * 1.9))
+  const btnH   = 54
+  const btnY   = HEIGHT - 72
+
+  function drawCanvasBtn (bx, by, bw, bh, label, c0, c1, borderMidColor) {
+    ctx.save()
+    ctx.shadowColor = `rgba(169,124,58,${0.55 * pulse})`
+    ctx.shadowBlur  = 26 * pulse
+    const bg2 = ctx.createLinearGradient(bx, by, bx + bw, by + bh)
+    bg2.addColorStop(0, c0); bg2.addColorStop(1, c1)
+    ctx.fillStyle = bg2
+    roundRect(bx, by, bw, bh, 6); ctx.fill()
+    const bd = ctx.createLinearGradient(bx, 0, bx + bw, 0)
+    bd.addColorStop(0,   'rgba(169,124,58,0.18)')
+    bd.addColorStop(0.5, borderMidColor ?? `rgba(169,124,58,${0.75 * pulse})`)
+    bd.addColorStop(1,   'rgba(169,124,58,0.18)')
+    ctx.strokeStyle = bd; ctx.lineWidth = 1.5
+    roundRect(bx, by, bw, bh, 6); ctx.stroke()
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font         = 'bold 15px monospace'
+    ctx.fillStyle    = `rgba(242,232,213,${0.72 + 0.28 * pulse})`
+    ctx.shadowColor  = 'transparent'
+    ctx.fillText(label, bx + bw / 2, by + bh / 2)
+    ctx.restore()
+  }
+
+  if (earnedDiscount > 0) {
+    const bw = 290, gap = 20
+    const b1x = CX - bw - gap / 2
+    const b2x = CX + gap / 2
+    drawCanvasBtn(b1x, btnY, bw, btnH, '▶   PLAY AGAIN',                  '#2a1a0a', '#1a0e06', null)
+    drawCanvasBtn(b2x, btnY, bw, btnH, `🛒  CLAIM ${earnedDiscount}% OFF`, '#0a2a14', '#061a0a', `rgba(74,222,128,${0.65 * pulse})`)
+  } else {
+    const bw = 320
+    const bx = CX - bw / 2
+    drawCanvasBtn(bx, btnY, bw, btnH, '▶   PLAY AGAIN', '#2a1a0a', '#1a0e06', null)
+  }
 }
 
 function draw () {
@@ -2257,20 +2398,38 @@ function drawHUD () {
   ctx.restore()
 }
 
-// Returns true if the event coords land inside the CTA button (accounting for canvas scaling)
-function isOnCtaButton (e) {
-  const canvas = canvasRef.value
-  const rect   = canvas.getBoundingClientRect()
-  const scaleX = WIDTH  / rect.width
-  const scaleY = HEIGHT / rect.height
+// Returns canvas-space coordinates from a mouse or touch event
+function getCanvasCoords (e) {
+  const canvas  = canvasRef.value
+  const rect    = canvas.getBoundingClientRect()
+  const scaleX  = WIDTH  / rect.width
+  const scaleY  = HEIGHT / rect.height
   const clientX = e.touches ? e.touches[0].clientX : e.clientX
   const clientY = e.touches ? e.touches[0].clientY : e.clientY
-  const cx = (clientX - rect.left) * scaleX
-  const cy = (clientY - rect.top)  * scaleY
-  const btnW = 320, btnH = 54
-  const btnX = WIDTH / 2 - btnW / 2
-  const btnY = HEIGHT - 72
-  return cx >= btnX && cx <= btnX + btnW && cy >= btnY && cy <= btnY + btnH
+  return {
+    cx: (clientX - rect.left) * scaleX,
+    cy: (clientY - rect.top)  * scaleY,
+  }
+}
+
+function isOnPlayAgainBtn (e) {
+  const { cx, cy } = getCanvasCoords(e)
+  const btnH = 54, btnY = HEIGHT - 72
+  if (gameState === 'gameover' && earnedDiscount > 0) {
+    const bw = 290, gap = 20
+    const bx = WIDTH / 2 - bw - gap / 2
+    return cx >= bx && cx <= bx + bw && cy >= btnY && cy <= btnY + btnH
+  }
+  const bw = 320, bx = WIDTH / 2 - bw / 2
+  return cx >= bx && cx <= bx + bw && cy >= btnY && cy <= btnY + btnH
+}
+
+function isOnShopBtn (e) {
+  if (gameState !== 'gameover' || earnedDiscount <= 0) return false
+  const { cx, cy } = getCanvasCoords(e)
+  const bw = 290, gap = 20, btnH = 54, btnY = HEIGHT - 72
+  const bx = WIDTH / 2 + gap / 2
+  return cx >= bx && cx <= bx + bw && cy >= btnY && cy <= btnY + btnH
 }
 
 // ── Touch input ─────────────────────────────────────────────────────────────
@@ -2291,8 +2450,13 @@ function isOnCart (cx) {
 
 function onTouchStart (e) {
   e.preventDefault()
-  if (gameState === 'start' || gameState === 'gameover') {
-    if (isOnCtaButton(e)) beginPlaying()
+  if (gameState === 'start') {
+    if (isOnPlayAgainBtn(e)) beginPlaying()
+    return
+  }
+  if (gameState === 'gameover') {
+    if (isOnShopBtn(e))           applyDiscount()
+    else if (isOnPlayAgainBtn(e)) beginPlaying()
     return
   }
   if (gameState !== 'playing') return
@@ -2361,8 +2525,11 @@ function onKeyUp (e) {
   if (e.key === 'ArrowRight' || e.key === 'd') keys.right = false
 }
 function onClick (e) {
-  if (gameState === 'start' || gameState === 'gameover') {
-    if (isOnCtaButton(e)) beginPlaying()
+  if (gameState === 'start') {
+    if (isOnPlayAgainBtn(e)) beginPlaying()
+  } else if (gameState === 'gameover') {
+    if (isOnShopBtn(e))           applyDiscount()
+    else if (isOnPlayAgainBtn(e)) beginPlaying()
   }
 }
 
@@ -2397,6 +2564,7 @@ onUnmounted(() => {
   window.removeEventListener('orientationchange',  checkOrientation)
   window.removeEventListener('deviceorientation',  onDeviceOrientation)
   unlockScroll()
+  if (toastTimer) clearTimeout(toastTimer)
 })
 </script>
 
@@ -2616,4 +2784,33 @@ onUnmounted(() => {
 .portrait-fade-leave-active { transition: opacity 0.3s ease; }
 .portrait-fade-enter-from,
 .portrait-fade-leave-to     { opacity: 0; }
+
+/* ── Discount toast ──────────────────────────────────────────────────────── */
+.discount-toast {
+  position: fixed;
+  bottom: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  background: linear-gradient(135deg, rgba(10,42,20,0.97), rgba(6,26,10,0.97));
+  border: 1px solid rgba(74, 222, 128, 0.55);
+  border-radius: 14px;
+  padding: 14px 32px;
+  color: #f2e8d5;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 1.15rem;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.55), 0 0 24px rgba(74,222,128,0.18);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 90vw;
+  text-align: center;
+  pointer-events: all;
+}
+
+.toast-slide-enter-active { transition: all 0.45s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.toast-slide-leave-active  { transition: all 0.35s ease-in; }
+.toast-slide-enter-from    { opacity: 0; transform: translateX(-50%) translateY(20px) scale(0.88); }
+.toast-slide-leave-to      { opacity: 0; transform: translateX(-50%) translateY(20px) scale(0.88); }
 </style>

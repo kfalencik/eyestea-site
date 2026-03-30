@@ -69,6 +69,7 @@ function addToCart(item) {
   } else {
     cartItems.value.push({ ...item, cartId: ++cartIdCounter })
   }
+  cartOpen.value = true
   showToast(item.emoji)
 }
 
