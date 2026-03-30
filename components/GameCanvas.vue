@@ -1535,13 +1535,52 @@ function draw () {
   const cartBounceY = cartBounceTimer > 0
     ? Math.sin((1 - cartBounceTimer / CART_BOUNCE_FRAMES) * Math.PI) * 7
     : 0
+  const cartDrawX = cart.x
+  const cartDrawY = cart.y + cartBounceY
+
+  // Mini stacked cans inside the cart (up to 10, resets on power-up)
+  if (powerUpProgress > 0) {
+    const miniW   = 16
+    const miniH   = 30
+    const gap     = 2   // px between cans
+    const maxCans = 10
+    const count   = Math.min(powerUpProgress, maxCans)
+    // Cart basket occupies roughly the centre 60% horizontally, top 55% vertically
+    const basketX      = cartDrawX + cart.w * 0.20
+    const basketW      = cart.w * 0.60
+    const basketBottom = cartDrawY + cart.h * 0.58
+    // Fit cans in a single row; if > 5 use two rows
+    const cols = count <= 5 ? count : Math.ceil(count / 2)
+    // Centre the row(s) in the basket
+    const rowW  = cols * miniW + (cols - 1) * gap
+    const rowX  = basketX + (basketW - rowW) / 2
+    for (let i = 0; i < count; i++) {
+      const col  = i % cols
+      const row  = Math.floor(i / cols)
+      const cx   = rowX + col * (miniW + gap)
+      const cy   = basketBottom - miniH - row * (miniH + 1)
+      // Use caughtLog to determine which type this slot is (most recent = rightmost)
+      const logIdx  = caughtLog.length - count + i
+      const canType = (logIdx >= 0 && caughtLog[logIdx]) ? caughtLog[logIdx] : 'peach'
+      const imgKey  = canType === 'golden' ? 'peach' : canType
+      ctx.save()
+      ctx.globalAlpha = 0.92
+      if (canType === 'golden') {
+        ctx.shadowColor = '#ffd700'
+        ctx.shadowBlur  = 6
+      }
+      ctx.drawImage(imgs[imgKey], cx, cy, miniW, miniH)
+      ctx.restore()
+    }
+  }
+
   ctx.save()
   if (cartDir === 1) {
     ctx.translate(cart.x + cart.w / 2, 0)
     ctx.scale(-1, 1)
-    ctx.drawImage(imgs.cart, -cart.w / 2, cart.y + cartBounceY, cart.w, cart.h)
+    ctx.drawImage(imgs.cart, -cart.w / 2, cartDrawY, cart.w, cart.h)
   } else {
-    ctx.drawImage(imgs.cart, cart.x, cart.y + cartBounceY, cart.w, cart.h)
+    ctx.drawImage(imgs.cart, cart.x, cartDrawY, cart.w, cart.h)
   }
   ctx.restore()
 
